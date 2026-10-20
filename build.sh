@@ -1,8 +1,19 @@
 #!/bin/bash
 # Bouwt "Screenshot Hub.app" uit ScreenshotHub.swift.
-# Gebruik: bash build.sh
+#
+# Gebruik:
+#   bash build.sh            lokale build voor je eigen Mac (ad-hoc ondertekend)
+#   bash build.sh --release  build om te delen: vereist een schone git-stand, een Developer ID
+#                            (SIGN_IDENTITY) en notarisatie (NOTARY_PROFILE)
 set -euo pipefail
 cd "$(dirname "$0")"
+
+RELEASE=0
+case "${1:-}" in
+  "") ;;
+  --release) RELEASE=1 ;;
+  *) echo "Onbekende optie: $1 (gebruik: bash build.sh [--release])"; exit 1 ;;
+esac
 
 if ! command -v swiftc >/dev/null 2>&1; then
   echo "swiftc niet gevonden. Installeer eerst de Command Line Tools: xcode-select --install"
@@ -14,18 +25,40 @@ EXE="ScreenshotHub"
 
 # Versie uit VERSION; buildnummer, commit en datum uit git. Het Over-venster toont ze.
 VERSION="$(tr -d '[:space:]' < VERSION)"
+# De bestanden waaruit de app wordt gebouwd. Wijkt een daarvan af van de commit (gewijzigd of
+# nog niet in git), dan is de build "dirty" en hoort hij niet bij een bekende commit.
+INPUTS=(ScreenshotHub.swift AppIcon.swift ScreenshotHub.entitlements VERSION build.sh)
+DIRTY=0
 if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
   BUILD_NUMBER="$(git rev-list --count HEAD)"
   COMMIT="$(git rev-parse --short HEAD)"
-  # Niet-gecommitte wijzigingen in bestanden die git al kent, maken de build "dirty".
-  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  if [ -n "$(git status --porcelain -- "${INPUTS[@]}")" ]; then
+    DIRTY=1
     COMMIT="$COMMIT-dirty"
   fi
 else
   BUILD_NUMBER="0"
   COMMIT="onbekend"
+  DIRTY=1
 fi
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# Waarmee gebouwd is, voor het Over-venster.
+TOOLCHAIN="$(swiftc --version 2>/dev/null | head -n 1 | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+SDK_VERSION="$(xcrun --show-sdk-version 2>/dev/null || echo onbekend)"
+
+SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+if [ "$RELEASE" = 1 ]; then
+  # Een build om te delen moet bij een bekende commit horen en door Apple te controleren zijn.
+  if [ "$DIRTY" = 1 ]; then
+    echo "--release: commit eerst je wijzigingen in: ${INPUTS[*]}"
+    git status --short -- "${INPUTS[@]}" || true
+    exit 1
+  fi
+  if [ "$SIGN_IDENTITY" = "-" ] || [ -z "${NOTARY_PROFILE:-}" ]; then
+    echo "--release: zet SIGN_IDENTITY (Developer ID Application: …) en NOTARY_PROFILE; zie README."
+    exit 1
+  fi
+fi
 
 echo "Bouwen: versie $VERSION, build $BUILD_NUMBER ($COMMIT) voor $(uname -m)..."
 rm -rf "$APP"
@@ -63,6 +96,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
   <key>ScreenshotHubCommit</key><string>$COMMIT</string>
   <key>ScreenshotHubBuildDate</key><string>$BUILD_DATE</string>
+  <key>ScreenshotHubToolchain</key><string>$TOOLCHAIN</string>
+  <key>ScreenshotHubSDK</key><string>$SDK_VERSION</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSDesktopFolderUsageDescription</key><string>Screenshot Hub toont en verplaatst screenshots op je bureaublad.</string>
@@ -84,7 +119,6 @@ PLIST
 # Zonder SIGN_IDENTITY is het een lokale ad-hoc handtekening: genoeg voor je eigen Mac.
 # Met een Developer ID, bijvoorbeeld SIGN_IDENTITY="Developer ID Application: Naam (TEAMID)",
 # krijgt de handtekening ook een tijdstempel, zodat Apple hem kan notariseren.
-SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 SIGN_ARGS=(--force --options runtime --entitlements ScreenshotHub.entitlements --sign "$SIGN_IDENTITY")
 if [ "$SIGN_IDENTITY" != "-" ]; then
   SIGN_ARGS+=(--timestamp)
@@ -114,3 +148,6 @@ touch "$APP"
 
 echo "Klaar: $(pwd)/$APP"
 echo "Sleep hem naar Programma's of start hem met: open \"$APP\""
+if [ "$RELEASE" = 0 ]; then
+  echo "Let op: dit is een lokale build, alleen voor deze Mac. Om te delen: bash build.sh --release"
+fi
