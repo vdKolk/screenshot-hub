@@ -1145,8 +1145,9 @@ enum AppInfo {
         Hardened Runtime: \(runtime)
         Handtekening: \(signing)
         Klembord ophalen: \(Store.shared.watchClipboard ? "aan" : "uit")
+        Updates controleren: \(UpdateChecker.shared.enabled ? "dagelijks, alleen bij github.com" : "uit")
 
-        Broncode: github.com/vdKolk/screenshot-hub
+        Broncode: github.com/\(UpdateChecker.repository)
         """
     }
 
@@ -1155,7 +1156,7 @@ enum AppInfo {
             .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
             .foregroundColor: NSColor.labelColor,
         ])
-        let link = "github.com/vdKolk/screenshot-hub"
+        let link = "github.com/\(UpdateChecker.repository)"
         let range = (summary as NSString).range(of: link)
         if range.location != NSNotFound {
             credits.addAttribute(.link, value: "https://\(link)", range: range)
@@ -1175,21 +1176,165 @@ enum AppInfo {
     }
 }
 
+/// Kijkt hooguit één keer per dag of er op GitHub een nieuwere versie staat en geeft dan een
+/// melding met een knop naar de releasepagina. De app downloadt of installeert zelf niets.
+/// Dit is het enige netwerkverkeer van de app (entitlement com.apple.security.network.client).
+final class UpdateChecker: ObservableObject {
+    static let shared = UpdateChecker()
+
+    static let repository = "vdKolk/screenshot-hub"
+    private static let releasesURL = URL(string: "https://api.github.com/repos/\(repository)/releases?per_page=30")!
+    private static let interval: TimeInterval = 24 * 60 * 60
+    /// Een antwoord met 30 releases is een paar honderd kB; alles daarboven is verdacht.
+    private static let maxResponseBytes = 2_000_000
+
+    @Published var enabled: Bool {
+        didSet {
+            UserDefaults.standard.set(enabled, forKey: "checkForUpdates")
+            if enabled { checkIfDue() } else { available = nil }
+        }
+    }
+    /// De nieuwere versie die gevonden is, zoals "1.3.0".
+    @Published private(set) var available: String?
+    @Published private(set) var isChecking = false
+    /// De eerste keer vertelt de app dat hij contact maakt met GitHub.
+    @Published var disclosureShown: Bool {
+        didSet { UserDefaults.standard.set(disclosureShown, forKey: "updateDisclosureShown") }
+    }
+
+    private let session: URLSession
+    private var timer: Timer?
+
+    init() {
+        let defaults = UserDefaults.standard
+        enabled = defaults.object(forKey: "checkForUpdates") as? Bool ?? true
+        disclosureShown = defaults.bool(forKey: "updateDisclosureShown")
+        // Geen cookies, geen cache op schijf: het verzoek laat niets achter.
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 15
+        session = URLSession(configuration: configuration)
+        // Wie de app dagen open laat staan, krijgt ook een melding.
+        let timer = Timer(timeInterval: 60 * 60, repeats: true) { [weak self] _ in self?.checkIfDue() }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+        DispatchQueue.main.async { [weak self] in self?.checkIfDue() }
+    }
+
+    static var releasePageURL: URL { URL(string: "https://github.com/\(repository)/releases")! }
+
+    /// De link maakt de app zelf; een URL uit het antwoord van de server wordt nooit geopend.
+    static func releaseURL(for version: String) -> URL {
+        URL(string: "https://github.com/\(repository)/releases/tag/v\(version)")!
+    }
+
+    func checkIfDue() {
+        guard enabled else { return }
+        let last = UserDefaults.standard.object(forKey: "lastUpdateCheck") as? Date ?? .distantPast
+        if Date().timeIntervalSince(last) >= UpdateChecker.interval { check(manual: false) }
+    }
+
+    func checkNow() { check(manual: true) }
+
+    /// "Niet nu": geen melding meer voor deze versie, wel weer voor een volgende.
+    func dismiss() {
+        UserDefaults.standard.set(available, forKey: "dismissedUpdate")
+        available = nil
+    }
+
+    private func check(manual: Bool) {
+        guard !isChecking else { return }
+        isChecking = true
+        var request = URLRequest(url: UpdateChecker.releasesURL)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        // GitHub vereist een User-Agent; het versienummer sturen we niet mee.
+        request.setValue("ScreenshotHub", forHTTPHeaderField: "User-Agent")
+        session.dataTask(with: request) { [weak self] data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode
+            let newest = error == nil && status == 200 ? data.flatMap(UpdateChecker.newestVersion) : nil
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isChecking = false
+                guard let newest else {
+                    // Een automatische check die mislukt, probeert het later stil opnieuw.
+                    if manual {
+                        Store.shared.showToast(error != nil
+                            ? "Controleren lukte niet: geen verbinding met GitHub"
+                            : "Controleren lukte niet: GitHub gaf geen bruikbaar antwoord")
+                    }
+                    return
+                }
+                UserDefaults.standard.set(Date(), forKey: "lastUpdateCheck")
+                self.handle(newest: newest, manual: manual)
+            }
+        }.resume()
+    }
+
+    private func handle(newest: String, manual: Bool) {
+        guard UpdateChecker.isNewer(newest, than: AppInfo.version) else {
+            available = nil
+            if manual { Store.shared.showToast("Je hebt de nieuwste versie (\(AppInfo.version))") }
+            return
+        }
+        let dismissed = UserDefaults.standard.string(forKey: "dismissedUpdate")
+        if manual || dismissed != newest { available = newest }
+    }
+
+    /// De hoogste versie uit de releases: alleen tags als v1.2.3, geen concepten en niet de
+    /// pre-release "laatste-build". Alles wat er anders uitziet, wordt genegeerd.
+    static func newestVersion(from data: Data) -> String? {
+        guard data.count <= maxResponseBytes,
+              let releases = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+        let versions: [String] = releases.compactMap { release in
+            guard release["draft"] as? Bool != true,
+                  let tag = release["tag_name"] as? String, tag.hasPrefix("v") else { return nil }
+            let version = String(tag.dropFirst())
+            return parse(version) != nil ? version : nil
+        }
+        return versions.max { isNewer($1, than: $0) }
+    }
+
+    static func parse(_ version: String) -> [Int]? {
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        let numbers = parts.compactMap { part -> Int? in
+            guard !part.isEmpty, part.count <= 6, part.allSatisfy(\.isASCII), part.allSatisfy(\.isNumber) else { return nil }
+            return Int(part)
+        }
+        return numbers.count == 3 ? numbers : nil
+    }
+
+    static func isNewer(_ a: String, than b: String) -> Bool {
+        guard let x = parse(a), let y = parse(b) else { return false }
+        return y.lexicographicallyPrecedes(x)
+    }
+}
+
 @main
 struct ScreenshotHubApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = Store.shared
+    @StateObject private var updates = UpdateChecker.shared
 
     var body: some Scene {
         WindowGroup("Screenshot Hub") {
             ContentView()
                 .environmentObject(store)
+                .environmentObject(updates)
                 .frame(minWidth: 900, minHeight: 540)
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("Over Screenshot Hub") { AppInfo.showAboutPanel() }
                 Button("Kopieer versie-informatie") { AppInfo.copySummary() }
+                Divider()
+                Button(updates.isChecking ? "Bezig met controleren…" : "Controleer op updates…") {
+                    updates.checkNow()
+                }
+                .disabled(updates.isChecking)
+                Toggle("Dagelijks controleren op updates", isOn: $updates.enabled)
             }
             CommandGroup(replacing: .newItem) {
                 Button("Nieuwe screenshot") { store.captureToMemory() }
@@ -1225,6 +1370,7 @@ struct ScreenshotHubApp: App {
 
 struct ContentView: View {
     @EnvironmentObject var store: Store
+    @EnvironmentObject var updates: UpdateChecker
     @LocalState private var search = ""
     @LocalState private var anchor: URL?
     @LocalState private var memoryAnchor: UUID?
@@ -1245,6 +1391,7 @@ struct ContentView: View {
                 .frame(width: 270)
             Divider()
             VStack(spacing: 0) {
+                updateBanner
                 tabBar
                 Divider()
                 switch store.tab {
@@ -1267,6 +1414,47 @@ struct ContentView: View {
         }
         .overlay(alignment: .bottom) { toastView }
         .animation(.spring(response: 0.3), value: store.toast)
+    }
+
+    /// Melding over een nieuwe versie, of de eerste keer uitleg over de dagelijkse check.
+    @ViewBuilder
+    private var updateBanner: some View {
+        if let version = updates.available {
+            banner(icon: "arrow.down.circle.fill",
+                   text: "Versie \(version) van Screenshot Hub is beschikbaar. Je hebt \(AppInfo.version).") {
+                Button("Bekijk release") { NSWorkspace.shared.open(UpdateChecker.releaseURL(for: version)) }
+                    .buttonStyle(.borderedProminent)
+                Button("Niet nu") { updates.dismiss() }
+            }
+        } else if updates.enabled && !updates.disclosureShown {
+            banner(icon: "network",
+                   text: "Screenshot Hub kijkt één keer per dag op GitHub of er een nieuwe versie is. "
+                       + "Er gaat alleen een verzoek naar GitHub, dat daarbij je IP-adres ziet.") {
+                Button("Oké") { updates.disclosureShown = true }
+                Button("Zet uit") {
+                    updates.enabled = false
+                    updates.disclosureShown = true
+                }
+            }
+        }
+    }
+
+    private func banner<Buttons: View>(icon: String, text: String,
+                                       @ViewBuilder buttons: () -> Buttons) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: icon).foregroundStyle(Color.accentColor)
+                Text(text)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                buttons()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.accentColor.opacity(0.08))
+            Divider()
+        }
     }
 
     private var tabBar: some View {
