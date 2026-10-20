@@ -27,6 +27,11 @@ Build:
 - `bash build.sh --release` voor builds om te delen: weigert zonder Developer ID, zonder notarisatie of met niet-gecommitte wijzigingen.
 - De dirty-markering kijkt alleen nog naar de bestanden waaruit de app wordt gebouwd, inclusief bestanden die nog niet in git staan.
 - Swift-toolchain en macOS SDK staan in Info.plist en in het Over-venster.
+- `bash build.sh --dmg` maakt een DMG in `dist/` met de app en een snelkoppeling naar Programma's; `--release` maakt die DMG ook, en ondertekent, notariseert en staplet hem.
+
+Releases:
+
+- GitHub Actions bouwt de app en de DMG bij elke pull request en elke wijziging op main. De pre-release **Laatste build** bevat altijd de nieuwste build van main, en elke nieuwe versie in `VERSION` krijgt een eigen release met de DMG.
 
 ## 1.1.0
 

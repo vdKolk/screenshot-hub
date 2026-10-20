@@ -3,17 +3,22 @@
 #
 # Gebruik:
 #   bash build.sh            lokale build voor je eigen Mac (ad-hoc ondertekend)
+#   bash build.sh --dmg      lokale build plus een DMG in dist/, om te testen of uit te proberen
 #   bash build.sh --release  build om te delen: vereist een schone git-stand, een Developer ID
-#                            (SIGN_IDENTITY) en notarisatie (NOTARY_PROFILE)
+#                            (SIGN_IDENTITY) en notarisatie (NOTARY_PROFILE); maakt ook een
+#                            ondertekende en genotariseerde DMG in dist/
 set -euo pipefail
 cd "$(dirname "$0")"
 
 RELEASE=0
-case "${1:-}" in
-  "") ;;
-  --release) RELEASE=1 ;;
-  *) echo "Onbekende optie: $1 (gebruik: bash build.sh [--release])"; exit 1 ;;
-esac
+MAKE_DMG=0
+for arg in "$@"; do
+  case "$arg" in
+    --release) RELEASE=1; MAKE_DMG=1 ;;
+    --dmg) MAKE_DMG=1 ;;
+    *) echo "Onbekende optie: $arg (gebruik: bash build.sh [--dmg] [--release])"; exit 1 ;;
+  esac
+done
 
 if ! command -v swiftc >/dev/null 2>&1; then
   echo "swiftc niet gevonden. Installeer eerst de Command Line Tools: xcode-select --install"
@@ -142,6 +147,42 @@ if [ -n "${NOTARY_PROFILE:-}" ]; then
   xcrun stapler staple "$APP"
 fi
 
+# DMG om de app te delen: de app plus een snelkoppeling naar Programma's, zodat je hem
+# er met slepen in zet. Bij --release wordt ook de DMG ondertekend, genotariseerd en gestapled.
+if [ "$MAKE_DMG" = 1 ]; then
+  # Geen spaties: GitHub maakt daar punten van in de bijlagen van een release.
+  DMG="dist/ScreenshotHub-$VERSION.dmg"
+  STAGING=".build/dmg"
+  echo "DMG maken..."
+  rm -rf "$STAGING" "$DMG"
+  mkdir -p "$STAGING" dist
+  ditto "$APP" "$STAGING/$APP"
+  ln -s /Applications "$STAGING/Programma's"
+  # hdiutil faalt soms tijdelijk met "Resource busy" (bekend op build-servers): tot drie pogingen.
+  for attempt in 1 2 3; do
+    if hdiutil create -quiet -volname "Screenshot Hub $VERSION" -srcfolder "$STAGING" \
+        -format UDZO -fs HFS+ "$DMG"; then
+      break
+    fi
+    if [ "$attempt" = 3 ]; then
+      echo "DMG maken is drie keer mislukt."
+      exit 1
+    fi
+    echo "DMG maken mislukte, opnieuw over 5 seconden..."
+    rm -f "$DMG"
+    sleep 5
+  done
+  rm -rf "$STAGING"
+  if [ "$RELEASE" = 1 ]; then
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
+    echo "DMG notariseren..."
+    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$DMG"
+  fi
+  hdiutil verify -quiet "$DMG"
+  echo "DMG: $(pwd)/$DMG"
+fi
+
 # Finder en het Dock laten weten dat de app (en zijn icoon) is veranderd.
 touch "$APP"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
@@ -150,4 +191,8 @@ echo "Klaar: $(pwd)/$APP"
 echo "Sleep hem naar Programma's of start hem met: open \"$APP\""
 if [ "$RELEASE" = 0 ]; then
   echo "Let op: dit is een lokale build, alleen voor deze Mac. Om te delen: bash build.sh --release"
+  if [ "$MAKE_DMG" = 1 ]; then
+    echo "Deze DMG is niet genotariseerd: op een andere Mac moet de gebruiker de app eerst toestaan"
+    echo "via Systeeminstellingen › Privacy en beveiliging › Open toch. Zie README."
+  fi
 fi

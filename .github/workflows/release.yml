@@ -1,0 +1,197 @@
+# Bouwt Screenshot Hub bij elke wijziging.
+#
+# - Pull request: app en DMG bouwen als controle; de DMG staat als artefact bij de run.
+# - Push naar main: de pre-release "Laatste build" wordt vervangen door een build van die commit.
+#   Bestaat de tag v<VERSION> nog niet, dan komt er ook een release voor die versie bij.
+#
+# Ondertekenen en notariseren gebeurt alleen bij een push naar main, en alleen als de secrets
+# hieronder zijn ingesteld (Settings › Secrets and variables › Actions). Zonder secrets worden
+# het niet-genotariseerde pre-releases.
+#   MACOS_CERTIFICATE_P12       Developer ID Application-certificaat met sleutel, base64 (.p12)
+#   MACOS_CERTIFICATE_PASSWORD  wachtwoord van dat .p12-bestand
+#   NOTARY_API_KEY              App Store Connect API-sleutel (inhoud van het .p8-bestand)
+#   NOTARY_KEY_ID               id van die sleutel
+#   NOTARY_ISSUER_ID            issuer-id van je App Store Connect-team
+
+name: Build en release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Builds van main na elkaar, zodat releases niet door elkaar lopen; een PR-build wordt
+# afgebroken als er een nieuwere commit is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Bouwen
+    runs-on: macos-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+      dmg: ${{ steps.build.outputs.dmg }}
+      notarized: ${{ steps.build.outputs.notarized }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Volledige historie: build.sh telt de commits voor het buildnummer.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          swiftc --version
+          xcrun --show-sdk-version
+
+      - name: Developer ID klaarzetten
+        id: signing
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          if [ -z "$P12" ] || [ -z "$NOTARY_API_KEY" ]; then
+            echo "Geen Developer ID-secrets ingesteld: de build wordt niet genotariseerd."
+            exit 0
+          fi
+          # Een tijdelijke sleutelhanger die alleen tijdens deze run bestaat.
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -d user -s "$KEYCHAIN"
+
+          printf '%s' "$NOTARY_API_KEY" > "$RUNNER_TEMP/notary.p8"
+          xcrun notarytool store-credentials ci-notary --key "$RUNNER_TEMP/notary.p8" \
+            --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" --keychain "$KEYCHAIN"
+          rm -f "$RUNNER_TEMP/notary.p8"
+
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -n 1)"
+          if [ -z "$IDENTITY" ]; then
+            echo "Het certificaat bevat geen Developer ID Application-identiteit."
+            exit 1
+          fi
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "keychain=$KEYCHAIN" >> "$GITHUB_OUTPUT"
+
+      - name: App en DMG bouwen
+        id: build
+        env:
+          IDENTITY: ${{ steps.signing.outputs.identity }}
+        run: |
+          if [ -n "$IDENTITY" ]; then
+            SIGN_IDENTITY="$IDENTITY" NOTARY_PROFILE=ci-notary bash build.sh --release
+            echo "notarized=true" >> "$GITHUB_OUTPUT"
+          else
+            bash build.sh --dmg
+            echo "notarized=false" >> "$GITHUB_OUTPUT"
+          fi
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "dmg=ScreenshotHub-$VERSION.dmg" >> "$GITHUB_OUTPUT"
+          plutil -p "Screenshot Hub.app/Contents/Info.plist" | grep -E 'Version|ScreenshotHub'
+
+      - name: Sleutelhanger opruimen
+        if: always() && steps.signing.outputs.keychain != ''
+        env:
+          KEYCHAIN: ${{ steps.signing.outputs.keychain }}
+        run: security delete-keychain "$KEYCHAIN" || true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/${{ steps.build.outputs.dmg }}
+          # De DMG zelf, niet ingepakt in een zip.
+          archive: false
+          retention-days: 14
+          if-no-files-found: error
+
+  release:
+    name: Release bijwerken
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Alleen deze job mag releases en tags maken; de job die de code bouwt niet.
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.build.outputs.version }}
+      DMG: ${{ needs.build.outputs.dmg }}
+      NOTARIZED: ${{ needs.build.outputs.notarized }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.build.outputs.dmg }}
+          path: dist
+
+      - name: Release-notes opstellen
+        run: |
+          SHORT="${SHA:0:7}"
+          # Het stuk uit CHANGELOG.md voor deze versie.
+          awk -v v="## $VERSION" '$0 == v {found=1; next} found && /^## / {exit} found' CHANGELOG.md \
+            | sed '/./,$!d' > changes.md
+          {
+            echo "Build van commit $SHORT."
+            echo
+            if [ "$NOTARIZED" = "true" ]; then
+              echo "Ondertekend met een Developer ID en genotariseerd door Apple. Open de DMG en sleep Screenshot Hub naar Programma's."
+            else
+              echo "**Testversie: niet genotariseerd.** macOS blokkeert de app de eerste keer. Zo open je hem toch:"
+              echo
+              echo "1. Open de DMG en sleep Screenshot Hub naar Programma's."
+              echo "2. Start de app en klik in de melding op Klaar."
+              echo "3. Ga naar Systeeminstellingen › Privacy en beveiliging en klik bij Screenshot Hub op Open toch."
+              echo
+              echo "Alleen voor mensen die weten van wie de app komt."
+            fi
+            echo
+            echo "Werkt op Macs met Apple silicon en macOS 13 of nieuwer."
+          } > install.md
+          { cat install.md; echo; echo "## Wijzigingen in $VERSION"; echo; cat changes.md; } > notes-version.md
+          { echo "De nieuwste build van main. Wordt bij elke wijziging vervangen."; echo; cat install.md; } > notes-latest.md
+
+      - name: Laatste build vervangen
+        run: |
+          gh release delete laatste-build --yes --cleanup-tag || true
+          gh release create laatste-build "dist/$DMG" --prerelease --latest=false \
+            --target "$SHA" --title "Laatste build ($VERSION, ${SHA:0:7})" --notes-file notes-latest.md
+
+      - name: Release voor deze versie
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION bestaat al; verhoog VERSION voor een nieuwe release."
+            exit 0
+          fi
+          if [ "$NOTARIZED" = "true" ]; then
+            KIND=(--latest)
+          else
+            KIND=(--prerelease)
+          fi
+          gh release create "v$VERSION" "dist/$DMG" "${KIND[@]}" \
+            --target "$SHA" --title "Screenshot Hub $VERSION" --notes-file notes-version.md
