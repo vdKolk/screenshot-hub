@@ -54,6 +54,45 @@ xcrun notarytool store-credentials screenshothub --apple-id <e-mail> --team-id <
 SIGN_IDENTITY="Developer ID Application: <Naam> (<TEAMID>)" NOTARY_PROFILE=screenshothub bash build.sh --release
 ```
 
+## Delen als DMG
+
+Een DMG is een schijfkopie met de app en een snelkoppeling naar Programma's. Wie hem opent, sleept de app naar Programma's en kan hem starten. De app werkt op Macs met Apple silicon en macOS 13 of nieuwer.
+
+**Om te delen: `bash build.sh --release`.** Daarmee ondertekent `build.sh` de app en de DMG met je Developer ID en laat hij beide notariseren door Apple. Het resultaat komt in `dist/ScreenshotHub-<versie>.dmg`. Ontvangers krijgen geen waarschuwing van macOS. Zie [Bouwen](#bouwen) voor `SIGN_IDENTITY` en `NOTARY_PROFILE`.
+
+**Zonder Developer ID: `bash build.sh --dmg`.** Dat maakt dezelfde DMG, maar niet genotariseerd. macOS blokkeert de app dan op een andere Mac met de melding dat Apple hem niet kan controleren. De ontvanger kan hem zo toch openen:
+
+1. Open de DMG en sleep **Screenshot Hub** naar **Programma's**.
+2. Start de app. Klik in de melding op **Klaar**.
+3. Ga naar **Systeeminstellingen › Privacy en beveiliging**, scrol naar beneden en klik bij Screenshot Hub op **Open toch**. Bevestig met je wachtwoord.
+
+Gebruik dit alleen om te testen met mensen die weten van wie de app komt: zo zetten ze een beveiligingscontrole van macOS voor deze app uit. Op beheerde Macs kan het bedrijfsbeleid dit ook tegenhouden.
+
+Bij het eerste gebruik vraagt de app om de screenshotmap, en bij **Screenshot maken** vraagt macOS om toestemming voor schermopname.
+
+## Releases via GitHub Actions
+
+`.github/workflows/release.yml` bouwt de app en de DMG op een macOS-runner van GitHub:
+
+- **Bij een pull request** als controle. De DMG staat 14 dagen als artefact bij de run.
+- **Bij elke wijziging op `main`** wordt de pre-release **Laatste build** vervangen door de nieuwste build. Bestaat er voor de versie in `VERSION` nog geen release (tag `v<versie>`), dan maakt de workflow die ook aan, met het stuk uit `CHANGELOG.md` als notes.
+
+Een nieuwe versie uitbrengen: verhoog `VERSION`, zet de wijzigingen onder een nieuwe kop in `CHANGELOG.md` en merge naar `main`.
+
+**Notariseren in de workflow.** Zonder secrets maakt de workflow niet-genotariseerde pre-releases, met de installatiestappen in de notes. Met deze secrets (Settings › Secrets and variables › Actions) ondertekent en notariseert hij via `build.sh --release`, en wordt een nieuwe versie een gewone release:
+
+| Secret | Inhoud |
+| --- | --- |
+| `MACOS_CERTIFICATE_P12` | Developer ID Application-certificaat met sleutel als `.p12`, base64 (`base64 -i cert.p12 \| pbcopy`) |
+| `MACOS_CERTIFICATE_PASSWORD` | Wachtwoord van dat `.p12`-bestand |
+| `NOTARY_API_KEY` | App Store Connect API-sleutel: de inhoud van het `.p8`-bestand |
+| `NOTARY_KEY_ID` | Id van die sleutel |
+| `NOTARY_ISSUER_ID` | Issuer-id van je App Store Connect-team |
+
+De secrets worden alleen gebruikt bij een push naar `main`, in een tijdelijke sleutelhanger die na de build wordt verwijderd. De job die de code bouwt, mag de repo alleen lezen; alleen de aparte releasejob mag releases maken.
+
+**Kosten.** Bij een private repo telt GitHub minuten op een macOS-runner tien keer zo zwaar als op Linux. Een build duurt een paar minuten en kost dus zo'n 20 tot 40 minuten van je tegoed.
+
 ## Versie
 
 Het versienummer staat in `VERSION`. `build.sh` voegt daar het buildnummer (aantal commits), de commit en de builddatum aan toe. Zit er niet-gecommit werk in de build, dan staat er `-dirty` achter de commit.
