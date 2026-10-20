@@ -111,6 +111,8 @@ final class Store: ObservableObject {
         return hotSpaces.first { $0.id == id }
     }
     private var lastUndo: UndoAction?
+    /// De melding waar de knop Ongedaan maken in staat; verdwijnt die, dan vervalt lastUndo.
+    private var undoToastID: UUID?
 
     @Published var hotSpaces: [HotSpace] = [] {
         didSet { saveHotSpaces() }
@@ -149,10 +151,15 @@ final class Store: ObservableObject {
     private var clipboardCount = NSPasteboard.general.changeCount
     /// Mappen waartoe de app toegang heeft geopend, per sleutel ("source" of het id van een Hot Space).
     private var scopedURLs: [String: URL] = [:]
+    /// Hot Spaces waarvan de bookmark niet meer werkt of geen toegang meer geeft.
+    private var inaccessibleSpaces: Set<UUID> = []
     private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "tiff", "gif"]
     private static let sourceKey = "source"
 
     init() {
+        // Alles wat deze app (en screencapture, dat hij start) aanmaakt, is alleen voor de eigenaar.
+        umask(0o077)
+        Store.removeLeftoverCaptures()
         let defaults = UserDefaults.standard
         var resolvedSource: URL?
         if let data = defaults.data(forKey: "sourceBookmark"), let resolved = Store.resolveBookmark(data) {
@@ -200,9 +207,26 @@ final class Store: ObservableObject {
         clipboardTimer = timer
     }
 
+    private static let capturePrefix = "ScreenshotHub-capture-"
+
+    /// Een tijdelijk opnamebestand blijft alleen achter als de app tijdens het maken stopte.
+    private static func removeLeftoverCaptures() {
+        let temp = FileManager.default.temporaryDirectory
+        let items = (try? FileManager.default.contentsOfDirectory(at: temp, includingPropertiesForKeys: nil)) ?? []
+        for item in items where item.lastPathComponent.hasPrefix(capturePrefix) {
+            try? FileManager.default.removeItem(at: item)
+        }
+    }
+
     static func isImageFile(_ url: URL) -> Bool {
-        guard imageExtensions.contains(url.pathExtension.lowercased()) else { return false }
-        return (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+        guard imageExtensions.contains(url.pathExtension.lowercased()),
+              (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { return false }
+        // Ook de inhoud moet een afbeelding zijn; ImageIO leest daarvoor alleen de kop van het bestand.
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let type = CGImageSourceGetType(source) as String?,
+              UTType(type)?.conforms(to: .image) == true,
+              CGImageSourceGetCount(source) > 0 else { return false }
+        return true
     }
 
     /// De echte thuismap. In de sandbox wijzen NSHomeDirectory en FileManager naar de container.
@@ -218,12 +242,12 @@ final class Store: ObservableObject {
     /// voor de kiezer, want toegang krijgt de app pas als je de map zelf kiest.
     static func systemScreenshotFolder() -> URL {
         if let location = UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location") {
-            let expanded = location.hasPrefix("~")
-                ? realHome.path + location.dropFirst()
-                : location
+            let url = location.hasPrefix("~/")
+                ? realHome.appendingPathComponent(String(location.dropFirst(2)), isDirectory: true)
+                : URL(fileURLWithPath: location, isDirectory: true)
             var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir), isDir.boolValue {
-                return URL(fileURLWithPath: expanded, isDirectory: true)
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                return url.standardizedFileURL
             }
         }
         return realHome.appendingPathComponent("Desktop", isDirectory: true)
@@ -368,19 +392,23 @@ final class Store: ObservableObject {
     func captureToMemory() {
         guard !isCapturing else { return }
         isCapturing = true
-        // screencapture kan niet direct naar het geheugen van deze app schrijven; het tijdelijke
-        // bestand wordt meteen ingelezen en weer verwijderd.
+        // screencapture kan niet direct naar het geheugen van deze app schrijven. Het tijdelijke
+        // bestand staat in de tijdelijke map van de sandboxcontainer, is alleen voor de eigenaar
+        // leesbaar (umask) en wordt meteen ingelezen en verwijderd.
         let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ScreenshotHub-\(UUID().uuidString).png")
+            .appendingPathComponent("\(Store.capturePrefix)\(UUID().uuidString).png")
         NSApp.hide(nil)
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.3) { [weak self] in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
             process.arguments = ["-i", temp.path]
+            var started = true
             do {
                 try process.run()
                 process.waitUntilExit()
-            } catch {}
+            } catch {
+                started = false
+            }
             let data = try? Data(contentsOf: temp)
             try? FileManager.default.removeItem(at: temp)
             let shot = data.flatMap { MemoryShot(png: $0) }
@@ -389,8 +417,14 @@ final class Store: ObservableObject {
                 NSApp.activate(ignoringOtherApps: true)
                 guard let self else { return }
                 self.isCapturing = false
-                // Geen bestand betekent dat de gebruiker met Escape heeft geannuleerd.
-                if let shot { self.addToMemory(shot) }
+                if let shot {
+                    self.addToMemory(shot)
+                } else if !started {
+                    self.showToast("Screenshot maken lukte niet: macOS kon de schermopname niet starten")
+                } else if data != nil {
+                    self.showToast("Screenshot maken lukte niet: de opname was geen leesbare afbeelding")
+                }
+                // Geen bestand en wel gestart: de gebruiker heeft met Escape geannuleerd.
             }
         }
     }
@@ -516,15 +550,16 @@ final class Store: ObservableObject {
         for shot in memory {
             let dest = uniqueDestination(for: Store.fileName(for: shot.date), in: folder)
             do {
-                try shot.png.write(to: dest, options: .withoutOverwriting)
-                // Datum van het moment van vastleggen, niet van opslaan, zodat de volgorde klopt.
-                try? fm.setAttributes([.creationDate: shot.date, .modificationDate: shot.date],
-                                      ofItemAtPath: dest.path)
-                Store.markAsScreenshot(dest)
+                try SafeFile.write(shot.png, to: dest) { temp in
+                    // Datum van het moment van vastleggen, niet van opslaan, zodat de volgorde klopt.
+                    try? fm.setAttributes([.creationDate: shot.date, .modificationDate: shot.date],
+                                          ofItemAtPath: temp.path)
+                    Store.markAsScreenshot(temp)
+                }
                 undo.stored.append((shot: shot, file: dest))
             } catch {
                 failed += 1
-                failure = failure ?? error.localizedDescription
+                failure = failure ?? SafeFile.describe(error)
             }
         }
         let storedIDs = Set(undo.stored.map(\.shot.id))
@@ -535,17 +570,17 @@ final class Store: ObservableObject {
             let sameFolder = src.deletingLastPathComponent().standardizedFileURL.path
                 == folder.standardizedFileURL.path
             if sameFolder { continue }
-            let dest = uniqueDestination(for: src.lastPathComponent, in: folder)
+            let dest = uniqueDestination(for: SafeFile.safeName(src.lastPathComponent), in: folder)
             do {
                 if moveFiles {
-                    try fm.moveItem(at: src, to: dest)
+                    try SafeFile.move(src, to: dest)
                 } else {
-                    try fm.copyItem(at: src, to: dest)
+                    try SafeFile.copy(src, to: dest)
                 }
                 undo.files.append((from: src, to: dest))
             } catch {
                 failed += 1
-                failure = failure ?? error.localizedDescription
+                failure = failure ?? SafeFile.describe(error)
             }
         }
 
@@ -581,6 +616,7 @@ final class Store: ObservableObject {
         lastUndo = nil
         let fm = FileManager.default
         var failed = 0
+        var failure: String?
         for item in last.files {
             do {
                 if last.moved {
@@ -588,12 +624,13 @@ final class Store: ObservableObject {
                     let back = fm.fileExists(atPath: item.from.path)
                         ? uniqueDestination(for: item.from.lastPathComponent, in: folder)
                         : item.from
-                    try fm.moveItem(at: item.to, to: back)
+                    try SafeFile.move(item.to, to: back)
                 } else {
                     try fm.trashItem(at: item.to, resultingItemURL: nil)
                 }
             } catch {
                 failed += 1
+                failure = failure ?? SafeFile.describe(error)
             }
         }
         var restored = last.discarded
@@ -603,6 +640,7 @@ final class Store: ObservableObject {
                 restored.append(item.shot)
             } catch {
                 failed += 1
+                failure = failure ?? SafeFile.describe(error)
             }
         }
         if !restored.isEmpty {
@@ -610,8 +648,8 @@ final class Store: ObservableObject {
         }
 
         let total = last.files.count + last.stored.count + last.discarded.count
-        if failed > 0 {
-            showToast("Ongedaan maken lukte niet voor \(failed) van \(total) screenshots")
+        if failed > 0, let failure {
+            showToast("Ongedaan maken lukte niet voor \(failed) van \(total) screenshots: \(failure)")
         } else if !last.discarded.isEmpty || !last.stored.isEmpty {
             showToast("Terug in het geheugen")
         } else {
@@ -629,7 +667,11 @@ final class Store: ObservableObject {
         var updated = current
         let key = current.id.uuidString
         if let data = current.bookmark, let resolved = Store.resolveBookmark(data) {
-            beginAccess(resolved.url, key: key)
+            if beginAccess(resolved.url, key: key) {
+                inaccessibleSpaces.remove(current.id)
+            } else {
+                inaccessibleSpaces.insert(current.id)
+            }
             if resolved.url.path != current.path || resolved.stale {
                 // Heette de Hot Space naar de map, dan verhuist de naam mee.
                 if current.name == current.url.lastPathComponent {
@@ -641,6 +683,9 @@ final class Store: ObservableObject {
         } else if current.bookmark == nil, beginAccess(current.url, key: key) {
             // Hot Space uit een versie zonder sandbox: alleen buiten de sandbox te herstellen.
             updated.bookmark = Store.makeBookmark(current.url)
+        } else if current.bookmark != nil {
+            // De bookmark is niet meer te gebruiken, bijvoorbeeld omdat de map is verwijderd.
+            inaccessibleSpaces.insert(current.id)
         }
         if updated != current { hotSpaces[index] = updated }
         return updated
@@ -675,7 +720,10 @@ final class Store: ObservableObject {
     }
 
     func copyToClipboard(_ url: URL) {
-        guard let image = NSImage(contentsOf: url) else { return }
+        guard let image = NSImage(contentsOf: url) else {
+            showToast("Kopiëren lukte niet: het bestand is niet (meer) leesbaar")
+            return
+        }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.writeObjects([image])
@@ -705,6 +753,7 @@ final class Store: ObservableObject {
     func removeHotSpace(_ space: HotSpace) {
         if viewedSpace?.id == space.id { tab = .stored }
         hotSpaces.removeAll { $0.id == space.id }
+        inaccessibleSpaces.remove(space.id)
         endAccess(key: space.id.uuidString)
     }
 
@@ -724,8 +773,8 @@ final class Store: ObservableObject {
 
     /// Waarom een Hot Space nu niet bruikbaar is, of nil als hij dat wel is.
     private func unavailableReason(_ space: HotSpace) -> String? {
-        if space.bookmark == nil {
-            return "Geen toegang tot \(space.name). Verwijder de Hot Space en voeg hem opnieuw toe."
+        if space.bookmark == nil || inaccessibleSpaces.contains(space.id) {
+            return "Geen toegang (meer) tot \(space.name). Verwijder de Hot Space en voeg hem opnieuw toe."
         }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: space.path, isDirectory: &isDir), isDir.boolValue,
@@ -744,14 +793,120 @@ final class Store: ObservableObject {
     func showToast(_ text: String, canUndo: Bool = false) {
         let new = Toast(text: text, canUndo: canUndo)
         toast = new
+        if canUndo { undoToastID = new.id }
         // Met een knop erin blijft de melding langer staan, zodat je tijd hebt om te klikken.
         DispatchQueue.main.asyncAfter(deadline: .now() + (canUndo ? 6 : 2.5)) { [weak self] in
-            if self?.toast?.id == new.id { self?.toast = nil }
+            guard let self else { return }
+            if self.toast?.id == new.id { self.toast = nil }
+            // Daarna kan het niet meer ongedaan worden: laat de screenshots die daarvoor
+            // bewaard werden (weggegooid of opgeslagen) los, zodat ze uit het geheugen gaan.
+            if self.undoToastID == new.id {
+                self.undoToastID = nil
+                self.lastUndo = nil
+            }
         }
     }
 }
 
 // MARK: - Hulpfuncties
+
+/// Bestanden plaatsen zonder ooit iets te overschrijven en zonder half geschreven resultaat.
+/// Alles gaat eerst naar een verborgen tijdelijk bestand in dezelfde map (dus op dezelfde
+/// schijf) en wordt dan in één stap hernoemd. Bestaat de naam al, dan mislukt dat.
+enum SafeFile {
+    /// Nieuwe bestanden zijn alleen leesbaar voor de eigenaar (0600): screenshots kunnen alles bevatten.
+    static let permissions = 0o600
+
+    static func write(_ data: Data, to dest: URL, prepare: (URL) -> Void = { _ in }) throws {
+        try place(at: dest, permissions: permissions) { temp in
+            try data.write(to: temp, options: .withoutOverwriting)
+            prepare(temp)
+        }
+    }
+
+    static func copy(_ src: URL, to dest: URL, permissions: Int = SafeFile.permissions) throws {
+        try place(at: dest, permissions: permissions) { temp in
+            try FileManager.default.copyItem(at: src, to: temp)
+        }
+    }
+
+    /// Op dezelfde schijf een hernoeming; naar een andere schijf eerst een volledige kopie,
+    /// en pas daarna het origineel weg. Een verplaatst bestand houdt zijn eigen rechten.
+    static func move(_ src: URL, to dest: URL) throws {
+        do {
+            try renameExclusive(src, to: dest)
+        } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(EXDEV) {
+            let original = (try? FileManager.default.attributesOfItem(atPath: src.path)[.posixPermissions]
+                as? Int) ?? SafeFile.permissions
+            try copy(src, to: dest, permissions: original)
+            try FileManager.default.removeItem(at: src)
+        }
+    }
+
+    private static func place(at dest: URL, permissions: Int, fill: (URL) throws -> Void) throws {
+        let temp = dest.deletingLastPathComponent()
+            .appendingPathComponent(".ScreenshotHub-\(UUID().uuidString).tmp")
+        do {
+            try fill(temp)
+            try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: temp.path)
+            try renameExclusive(temp, to: dest)
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+            throw error
+        }
+    }
+
+    /// rename(2) overschrijft stilletjes; met RENAME_EXCL faalt hij als dest al bestaat.
+    private static func renameExclusive(_ src: URL, to dest: URL) throws {
+        let result = src.withUnsafeFileSystemRepresentation { from in
+            dest.withUnsafeFileSystemRepresentation { to in
+                renamex_np(from!, to!, UInt32(RENAME_EXCL))
+            }
+        }
+        if result != 0 { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+    }
+
+    /// Een bestandsnaam van buiten (een gesleept bestand) veilig maken: geen pad- of
+    /// stuurtekens, niet verborgen, en kort genoeg voor het bestandssysteem.
+    static func safeName(_ name: String) -> String {
+        let ext = (name as NSString).pathExtension
+        var base = (name as NSString).deletingPathExtension
+        base = String(base.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        base = String(base.drop { $0 == "." || $0 == " " })
+        if base.isEmpty { base = "Afbeelding" }
+        // 255 bytes is het maximum; laat ruimte voor " 99" en de extensie.
+        while base.utf8.count > 200 { base.removeLast() }
+        return ext.isEmpty ? base : base + "." + ext
+    }
+
+    /// Een begrijpelijke reden zonder bestandsnamen of paden.
+    static func describe(_ error: Error) -> String {
+        let error = error as NSError
+        let posix = error.domain == NSPOSIXErrorDomain ? Int32(error.code)
+            : (error.userInfo[NSUnderlyingErrorKey] as? NSError).flatMap {
+                $0.domain == NSPOSIXErrorDomain ? Int32($0.code) : nil
+            }
+        switch (error.domain, error.code, posix) {
+        case (_, _, ENOSPC?), (NSCocoaErrorDomain, NSFileWriteOutOfSpaceError, _):
+            return "er is niet genoeg ruimte"
+        case (_, _, EACCES?), (_, _, EPERM?),
+             (NSCocoaErrorDomain, NSFileWriteNoPermissionError, _),
+             (NSCocoaErrorDomain, NSFileReadNoPermissionError, _):
+            return "de app heeft geen toegang tot die map"
+        case (_, _, EROFS?), (NSCocoaErrorDomain, NSFileWriteVolumeReadOnlyError, _):
+            return "die schijf is alleen-lezen"
+        case (_, _, EEXIST?), (NSCocoaErrorDomain, NSFileWriteFileExistsError, _):
+            return "er staat al een bestand met die naam"
+        case (_, _, ENOENT?), (NSCocoaErrorDomain, NSFileNoSuchFileError, _),
+             (NSCocoaErrorDomain, NSFileReadNoSuchFileError, _):
+            return "het bestand bestaat niet meer"
+        default:
+            return "er ging iets mis met het bestand"
+        }
+    }
+}
 
 /// Pad met ~ voor de echte thuismap. In de sandbox kort NSString dat niet in,
 /// omdat de thuismap daar de container is.
@@ -914,6 +1069,9 @@ enum AppInfo {
     static var buildDate: Date? {
         (info["ScreenshotHubBuildDate"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
     }
+    /// Waarmee gebouwd is, zodat een build na te maken is.
+    static var toolchain: String { info["ScreenshotHubToolchain"] as? String ?? "onbekend" }
+    static var sdk: String { info["ScreenshotHubSDK"] as? String ?? "onbekend" }
 
     struct Signature {
         var hardenedRuntime = false
@@ -980,6 +1138,7 @@ enum AppInfo {
         Versie \(version), build \(build)
         Gebouwd: \(built)
         Commit: \(commitText)
+        Gebouwd met: \(toolchain), macOS SDK \(sdk)
 
         macOS: \(os.majorVersion).\(os.minorVersion).\(os.patchVersion) op \(arch), vereist 13.0 of nieuwer
         App Sandbox: \(Store.isSandboxed ? "aan" : "uit")
