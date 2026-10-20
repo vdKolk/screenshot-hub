@@ -2,6 +2,13 @@
 
 Het versienummer staat in `VERSION`. Het buildnummer is het aantal commits; samen met de commit en de builddatum zie je het in **Screenshot Hub › Over Screenshot Hub**.
 
+## 1.3.0
+
+- **Updatemelding**: de app kijkt hooguit één keer per dag bij GitHub of er een nieuwere versie is en toont dan bovenin een melding met een knop naar de release. **Niet nu** verbergt de melding tot de volgende versie.
+- **Screenshot Hub › Controleer op updates…** controleert direct; **Dagelijks controleren op updates** zet de check aan of uit (standaard aan). De eerste keer legt de app uit dat hij contact maakt met GitHub.
+- De app downloadt of installeert niets zelf. Alleen tags als `v1.2.3` tellen mee, het antwoord mag hooguit 2 MB zijn, en de link naar de release maakt de app zelf.
+- Nieuw recht `com.apple.security.network.client`, alleen voor deze check. Het Over-venster laat zien of de check aan staat.
+
 ## 1.2.0
 
 Gegevensbescherming:
