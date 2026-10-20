@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- App Sandbox: geen toegang tot bestanden, netwerk of hardware tenzij hieronder toegestaan. -->
+  <key>com.apple.security.app-sandbox</key><true/>
+  <!-- Lezen en schrijven in mappen die de gebruiker zelf kiest of naar de app sleept. -->
+  <key>com.apple.security.files.user-selected.read-write</key><true/>
+  <!-- Die keuze onthouden na een herstart (security-scoped bookmarks). -->
+  <key>com.apple.security.files.bookmarks.app-scope</key><true/>
+</dict>
+</plist>

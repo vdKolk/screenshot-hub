@@ -12,6 +12,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import ImageIO
+import Security
 
 // MARK: - Model
 
@@ -116,12 +117,14 @@ final class Store: ObservableObject {
     }
     @Published var sourceFolder: URL {
         didSet {
-            UserDefaults.standard.set(sourceFolder.path, forKey: "sourceFolder")
             selection = []
             startWatching()
             reload()
         }
     }
+    /// In de sandbox mag de app alleen bij mappen die je zelf kiest. Zolang er geen
+    /// screenshotmap gekozen is, is sourceFolder alleen een gok voor de kiezer.
+    @Published private(set) var hasSourceAccess = false
     @Published var onlyScreenshots: Bool {
         didSet {
             UserDefaults.standard.set(onlyScreenshots, forKey: "onlyScreenshots")
@@ -144,21 +147,31 @@ final class Store: ObservableObject {
     private var activationObserver: NSObjectProtocol?
     private var clipboardTimer: Timer?
     private var clipboardCount = NSPasteboard.general.changeCount
+    /// Mappen waartoe de app toegang heeft geopend, per sleutel ("source" of het id van een Hot Space).
+    private var scopedURLs: [String: URL] = [:]
     private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "tiff", "gif"]
+    private static let sourceKey = "source"
 
     init() {
         let defaults = UserDefaults.standard
-        if let saved = defaults.string(forKey: "sourceFolder") {
-            sourceFolder = URL(fileURLWithPath: saved, isDirectory: true)
-        } else {
-            sourceFolder = Store.systemScreenshotFolder()
+        var resolvedSource: URL?
+        if let data = defaults.data(forKey: "sourceBookmark"), let resolved = Store.resolveBookmark(data) {
+            resolvedSource = resolved.url
+            if resolved.stale, let fresh = Store.makeBookmark(resolved.url) {
+                defaults.set(fresh, forKey: "sourceBookmark")
+            }
         }
+        sourceFolder = resolvedSource ?? Store.systemScreenshotFolder()
         onlyScreenshots = defaults.object(forKey: "onlyScreenshots") as? Bool ?? true
         moveFiles = defaults.object(forKey: "moveFiles") as? Bool ?? true
-        watchClipboard = defaults.object(forKey: "watchClipboard") as? Bool ?? true
+        // Standaard uit: het klembord kan gevoelige afbeeldingen bevatten.
+        watchClipboard = defaults.object(forKey: "watchClipboard") as? Bool ?? false
         if let data = defaults.data(forKey: "hotSpaces"),
            let list = try? JSONDecoder().decode([HotSpace].self, from: data) {
             hotSpaces = list
+        }
+        if let resolvedSource {
+            hasSourceAccess = beginAccess(resolvedSource, key: Store.sourceKey)
         }
         for space in hotSpaces { refreshLocation(of: space) }
         saveHotSpaces()
@@ -192,16 +205,64 @@ final class Store: ObservableObject {
         return (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
     }
 
-    /// De map waar macOS screenshots opslaat (ingesteld via Cmd+Shift+5 > Opties), anders het bureaublad.
+    /// De echte thuismap. In de sandbox wijzen NSHomeDirectory en FileManager naar de container.
+    static let realHome: URL = {
+        if let entry = getpwuid(getuid()), let dir = entry.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }()
+
+    /// Beste gok voor de map waar macOS screenshots opslaat (⌘⇧5 › Opties), anders het bureaublad.
+    /// In de sandbox is de instelling van macOS niet leesbaar; dan dient dit alleen als startpunt
+    /// voor de kiezer, want toegang krijgt de app pas als je de map zelf kiest.
     static func systemScreenshotFolder() -> URL {
         if let location = UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location") {
-            let expanded = (location as NSString).expandingTildeInPath
+            let expanded = location.hasPrefix("~")
+                ? realHome.path + location.dropFirst()
+                : location
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir), isDir.boolValue {
                 return URL(fileURLWithPath: expanded, isDirectory: true)
             }
         }
-        return FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
+        return realHome.appendingPathComponent("Desktop", isDirectory: true)
+    }
+
+    // MARK: Toegang tot mappen (sandbox)
+
+    /// Bookmark die na een herstart weer toegang geeft tot een map die je zelf hebt gekozen.
+    static func makeBookmark(_ url: URL) -> Data? {
+        try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+    }
+
+    static func resolveBookmark(_ data: Data) -> (url: URL, stale: Bool)? {
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI],
+                                 relativeTo: nil, bookmarkDataIsStale: &stale) else { return nil }
+        return (url, stale)
+    }
+
+    /// Opent de toegang tot een map en houdt die open tot endAccess. Geeft false als het niet mag.
+    @discardableResult
+    private func beginAccess(_ url: URL, key: String) -> Bool {
+        if let open = scopedURLs[key] {
+            if open == url { return true }
+            open.stopAccessingSecurityScopedResource()
+            scopedURLs[key] = nil
+        }
+        guard url.startAccessingSecurityScopedResource() else {
+            // Zonder sandbox (bijvoorbeeld bij testen) is er niets af te schermen.
+            return !Store.isSandboxed
+        }
+        scopedURLs[key] = url
+        return true
+    }
+
+    static let isSandboxed = ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+
+    private func endAccess(key: String) {
+        scopedURLs.removeValue(forKey: key)?.stopAccessingSecurityScopedResource()
     }
 
     private static let screenshotAttribute = "com.apple.metadata:kMDItemIsScreenCapture"
@@ -294,10 +355,8 @@ final class Store: ObservableObject {
     /// Opent de Hot Space als tab, zodat je ziet wat erin staat.
     func openSpace(_ space: HotSpace) {
         let space = refreshLocation(of: space)
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: space.path, isDirectory: &isDir), isDir.boolValue,
-              !isInTrash(space.url) else {
-            showToast("De map van \(space.name) bestaat niet meer. Verwijder de Hot Space of zet de map terug.")
+        if let reason = unavailableReason(space) {
+            showToast(reason)
             return
         }
         tab = .space(space.id)
@@ -343,12 +402,21 @@ final class Store: ObservableObject {
         memorySelection = [shot.id]
     }
 
+    /// Markeringen (nspasteboard.org) waarmee wachtwoordmanagers en andere apps aangeven dat
+    /// klembordinhoud vertrouwelijk, tijdelijk of automatisch gemaakt is. Die halen we nooit op.
+    static let privateClipboardTypes: [NSPasteboard.PasteboardType] = [
+        NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"),
+        NSPasteboard.PasteboardType("org.nspasteboard.TransientType"),
+        NSPasteboard.PasteboardType("org.nspasteboard.AutoGeneratedType"),
+    ]
+
     /// Haalt een afbeelding van het klembord op, zoals een screenshot met ⌃⌘⇧4.
-    private func checkClipboard() {
-        let pasteboard = NSPasteboard.general
+    /// Alleen als je dat aanzet; de inhoud wordt pas gelezen als de soort klopt.
+    func checkClipboard(_ pasteboard: NSPasteboard = .general) {
         guard pasteboard.changeCount != clipboardCount else { return }
         clipboardCount = pasteboard.changeCount
         guard watchClipboard, let types = pasteboard.types else { return }
+        guard !types.contains(where: Store.privateClipboardTypes.contains) else { return }
         // Alleen een kale afbeelding telt. Gekopieerde bestanden, tekst met plaatjes
         // of webinhoud laten we liggen.
         let ignored: [NSPasteboard.PasteboardType] = [.fileURL, .URL, .string, .rtf, .rtfd, .html]
@@ -362,12 +430,21 @@ final class Store: ObservableObject {
     }
 
     func saveMemory(_ ids: [UUID]) {
+        guard ensureSourceAccess() else { return }
         deliver(files: [], memory: ids, into: sourceFolder, name: sourceFolder.lastPathComponent)
     }
 
     /// Slaat alles uit het geheugen op in de screenshotmap. Geeft false als iets niet lukte.
     func saveAllMemory() -> Bool {
-        deliver(files: [], memory: memoryShots.map(\.id), into: sourceFolder, name: sourceFolder.lastPathComponent)
+        guard ensureSourceAccess() else { return false }
+        return deliver(files: [], memory: memoryShots.map(\.id), into: sourceFolder,
+                       name: sourceFolder.lastPathComponent)
+    }
+
+    /// Vraagt eerst om de screenshotmap als de app daar nog geen toegang toe heeft.
+    private func ensureSourceAccess() -> Bool {
+        if !hasSourceAccess { chooseSourceFolder() }
+        return hasSourceAccess
     }
 
     func discardMemory(_ ids: [UUID]) {
@@ -411,10 +488,8 @@ final class Store: ObservableObject {
 
     func deliver(_ urls: [URL], memory ids: [UUID] = [], to space: HotSpace) {
         let space = refreshLocation(of: space)
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: space.path, isDirectory: &isDir), isDir.boolValue,
-              !isInTrash(space.url) else {
-            showToast("De map van \(space.name) bestaat niet meer. Verwijder de Hot Space of zet de map terug.")
+        if let reason = unavailableReason(space) {
+            showToast(reason)
             return
         }
         deliver(files: urls, memory: ids, into: space.url, name: space.name)
@@ -545,33 +620,34 @@ final class Store: ObservableObject {
         reload()
     }
 
-    /// Zoekt de map van een Hot Space op via de bookmark en werkt pad en naam bij als hij is hernoemd of verplaatst.
+    /// Zoekt de map van een Hot Space op via de bookmark, opent de toegang ertoe en werkt pad
+    /// en naam bij als hij is hernoemd of verplaatst.
     @discardableResult
     private func refreshLocation(of space: HotSpace) -> HotSpace {
         guard let index = hotSpaces.firstIndex(where: { $0.id == space.id }) else { return space }
         let current = hotSpaces[index]
         var updated = current
-        if let data = current.bookmark {
-            var stale = false
-            if let url = try? URL(resolvingBookmarkData: data, options: [.withoutUI],
-                                  relativeTo: nil, bookmarkDataIsStale: &stale),
-               url.path != current.path || stale {
+        let key = current.id.uuidString
+        if let data = current.bookmark, let resolved = Store.resolveBookmark(data) {
+            beginAccess(resolved.url, key: key)
+            if resolved.url.path != current.path || resolved.stale {
                 // Heette de Hot Space naar de map, dan verhuist de naam mee.
                 if current.name == current.url.lastPathComponent {
-                    updated.name = url.lastPathComponent
+                    updated.name = resolved.url.lastPathComponent
                 }
-                updated.path = url.path
-                updated.bookmark = (try? url.bookmarkData()) ?? data
+                updated.path = resolved.url.path
+                updated.bookmark = Store.makeBookmark(resolved.url) ?? data
             }
-        } else {
-            updated.bookmark = try? current.url.bookmarkData()
+        } else if current.bookmark == nil, beginAccess(current.url, key: key) {
+            // Hot Space uit een versie zonder sandbox: alleen buiten de sandbox te herstellen.
+            updated.bookmark = Store.makeBookmark(current.url)
         }
         if updated != current { hotSpaces[index] = updated }
         return updated
     }
 
     private func isInTrash(_ url: URL) -> Bool {
-        guard let trash = FileManager.default.urls(for: .trashDirectory, in: .userDomainMask).first else { return false }
+        let trash = Store.realHome.appendingPathComponent(".Trash")
         return url.standardizedFileURL.path.hasPrefix(trash.standardizedFileURL.path + "/")
     }
 
@@ -617,26 +693,46 @@ final class Store: ObservableObject {
         panel.prompt = "Toevoegen als Hot Space"
         guard panel.runModal() == .OK else { return }
         for url in panel.urls where !hotSpaces.contains(where: { $0.path == url.path }) {
-            hotSpaces.append(HotSpace(name: url.lastPathComponent,
-                                      path: url.path,
-                                      colorIndex: hotSpaces.count % palette.count,
-                                      bookmark: try? url.bookmarkData()))
+            let space = HotSpace(name: url.lastPathComponent,
+                                 path: url.path,
+                                 colorIndex: hotSpaces.count % palette.count,
+                                 bookmark: Store.makeBookmark(url))
+            beginAccess(url, key: space.id.uuidString)
+            hotSpaces.append(space)
         }
     }
 
     func removeHotSpace(_ space: HotSpace) {
         if viewedSpace?.id == space.id { tab = .stored }
         hotSpaces.removeAll { $0.id == space.id }
+        endAccess(key: space.id.uuidString)
     }
 
     func chooseSourceFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
+        panel.canCreateDirectories = true
         panel.directoryURL = sourceFolder
+        panel.message = "Kies de map waar je screenshots staan. Welke map macOS gebruikt, zie je bij ⌘⇧5 › Opties."
         panel.prompt = "Gebruik deze map"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        UserDefaults.standard.set(Store.makeBookmark(url), forKey: "sourceBookmark")
+        hasSourceAccess = beginAccess(url, key: Store.sourceKey)
         sourceFolder = url
+    }
+
+    /// Waarom een Hot Space nu niet bruikbaar is, of nil als hij dat wel is.
+    private func unavailableReason(_ space: HotSpace) -> String? {
+        if space.bookmark == nil {
+            return "Geen toegang tot \(space.name). Verwijder de Hot Space en voeg hem opnieuw toe."
+        }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: space.path, isDirectory: &isDir), isDir.boolValue,
+              !isInTrash(space.url) else {
+            return "De map van \(space.name) bestaat niet meer. Verwijder de Hot Space of zet de map terug."
+        }
+        return nil
     }
 
     private func saveHotSpaces() {
@@ -656,6 +752,13 @@ final class Store: ObservableObject {
 }
 
 // MARK: - Hulpfuncties
+
+/// Pad met ~ voor de echte thuismap. In de sandbox kort NSString dat niet in,
+/// omdat de thuismap daar de container is.
+func displayPath(_ path: String) -> String {
+    let home = Store.realHome.path
+    return path == home || path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+}
 
 /// Leest wat er op een Hot Space is neergezet: bestanden uit Finder of de app, en screenshots uit het geheugen.
 func loadDrop(from providers: [NSItemProvider], completion: @escaping ([URL], [UUID]) -> Void) {
@@ -800,6 +903,119 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// Versie- en beveiligingsinformatie voor het Over-venster. Versie, build, commit en
+/// builddatum zet build.sh in Info.plist; de handtekening leest de app uit zichzelf.
+enum AppInfo {
+    private static let info = Bundle.main.infoDictionary ?? [:]
+
+    static var version: String { info["CFBundleShortVersionString"] as? String ?? "onbekend" }
+    static var build: String { info["CFBundleVersion"] as? String ?? "onbekend" }
+    static var commit: String { info["ScreenshotHubCommit"] as? String ?? "onbekend" }
+    static var buildDate: Date? {
+        (info["ScreenshotHubBuildDate"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
+    }
+
+    struct Signature {
+        var hardenedRuntime = false
+        var adHoc = false
+        var teamID: String?
+        var signer: String?
+    }
+
+    /// Leest de eigen handtekening, zodat het Over-venster toont wat er echt is ondertekend.
+    static var signature: Signature? {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var info: CFDictionary?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation),
+                                            &info) == errSecSuccess,
+              let dict = info as? [String: Any] else { return nil }
+        var result = Signature()
+        let flags = (dict[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value ?? 0
+        result.hardenedRuntime = flags & SecCodeSignatureFlags.runtime.rawValue != 0
+        result.adHoc = flags & SecCodeSignatureFlags.adhoc.rawValue != 0
+        result.teamID = dict[kSecCodeInfoTeamIdentifier as String] as? String
+        if let certificates = dict[kSecCodeInfoCertificates as String] as? [SecCertificate],
+           let leaf = certificates.first {
+            result.signer = SecCertificateCopySubjectSummary(leaf) as String?
+        }
+        return result
+    }
+
+    /// Alle informatie als platte tekst, voor het Over-venster en om te kopiëren.
+    static var summary: String {
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        #if arch(arm64)
+        let arch = "Apple silicon (arm64)"
+        #else
+        let arch = "Intel (x86_64)"
+        #endif
+        let dutch = Date.FormatStyle(date: .long, time: .shortened, locale: Locale(identifier: "nl_NL"))
+        let built = buildDate.map { $0.formatted(dutch) } ?? "onbekend"
+        let dirty = commit.hasSuffix("-dirty")
+        let commitText = dirty
+            ? "\(commit.dropLast("-dirty".count)), met niet-gecommitte wijzigingen"
+            : commit
+
+        let signing: String
+        let runtime: String
+        if let signature {
+            if signature.adHoc {
+                signing = "lokaal (ad-hoc), niet genotariseerd"
+            } else {
+                signing = [signature.signer, signature.teamID.map { "team \($0)" }]
+                    .compactMap { $0 }.joined(separator: ", ")
+            }
+            runtime = signature.hardenedRuntime ? "aan" : "uit"
+        } else {
+            signing = "niet ondertekend"
+            runtime = "uit"
+        }
+
+        return """
+        Shoot first, store later.
+
+        Versie \(version), build \(build)
+        Gebouwd: \(built)
+        Commit: \(commitText)
+
+        macOS: \(os.majorVersion).\(os.minorVersion).\(os.patchVersion) op \(arch), vereist 13.0 of nieuwer
+        App Sandbox: \(Store.isSandboxed ? "aan" : "uit")
+        Hardened Runtime: \(runtime)
+        Handtekening: \(signing)
+        Klembord ophalen: \(Store.shared.watchClipboard ? "aan" : "uit")
+
+        Broncode: github.com/vdKolk/screenshot-hub
+        """
+    }
+
+    static func showAboutPanel() {
+        let credits = NSMutableAttributedString(string: summary, attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.labelColor,
+        ])
+        let link = "github.com/vdKolk/screenshot-hub"
+        let range = (summary as NSString).range(of: link)
+        if range.location != NSNotFound {
+            credits.addAttribute(.link, value: "https://\(link)", range: range)
+        }
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationVersion: version,
+            .version: "build \(build) · \(commit)",
+            .credits: credits,
+        ])
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    static func copySummary() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("Screenshot Hub\n" + summary, forType: .string)
+    }
+}
+
 @main
 struct ScreenshotHubApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -812,6 +1028,10 @@ struct ScreenshotHubApp: App {
                 .frame(minWidth: 900, minHeight: 540)
         }
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("Over Screenshot Hub") { AppInfo.showAboutPanel() }
+                Button("Kopieer versie-informatie") { AppInfo.copySummary() }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Nieuwe screenshot") { store.captureToMemory() }
                     .keyboardShortcut("n")
@@ -929,7 +1149,8 @@ struct ContentView: View {
             Toggle("Klembord ophalen", isOn: $store.watchClipboard)
                 .toggleStyle(.switch)
                 .controlSize(.small)
-                .help("Afbeeldingen die op het klembord komen, zoals een screenshot met ⌃⌘⇧4, verschijnen hier")
+                .help("Afbeeldingen die op het klembord komen, zoals een screenshot met ⌃⌘⇧4, verschijnen hier. "
+                      + "Inhoud die een app als vertrouwelijk of tijdelijk markeert, zoals uit een wachtwoordmanager, wordt overgeslagen.")
             Button("Alles opslaan") { store.saveMemory(store.memoryShots.map(\.id)) }
                 .disabled(store.memoryShots.isEmpty)
                 .help("Alles opslaan in \(store.sourceFolder.lastPathComponent) (⌘⇧S)")
@@ -964,7 +1185,9 @@ struct ContentView: View {
                         .foregroundStyle(.tertiary)
                     Text("Nog niets in het geheugen")
                         .font(.headline)
-                    Text("Klik op Screenshot maken (⌘N) of maak er een met ⌃⌘⇧4. Hij komt hier en is nog niet opgeslagen.")
+                    Text(store.watchClipboard
+                         ? "Klik op Screenshot maken (⌘N) of maak er een met ⌃⌘⇧4. Hij komt hier en is nog niet opgeslagen."
+                         : "Klik op Screenshot maken (⌘N). Zet Klembord ophalen aan om ook screenshots met ⌃⌘⇧4 hier te krijgen.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -1000,12 +1223,19 @@ struct ContentView: View {
     private var storedHeader: some View {
         HStack(spacing: 10) {
             Image(systemName: "folder").foregroundStyle(.secondary)
-            Text((store.sourceFolder.path as NSString).abbreviatingWithTildeInPath)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.head)
-            Button("Wijzig…") { store.chooseSourceFolder() }
-                .buttonStyle(.link)
+            if store.hasSourceAccess {
+                Text(displayPath(store.sourceFolder.path))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Button("Wijzig…") { store.chooseSourceFolder() }
+                    .buttonStyle(.link)
+            } else {
+                Text("Nog geen screenshotmap gekozen")
+                    .foregroundStyle(.secondary)
+                Button("Kies map…") { store.chooseSourceFolder() }
+                    .buttonStyle(.link)
+            }
             Spacer()
             TextField("Zoek op naam", text: $search)
                 .textFieldStyle(.roundedBorder)
@@ -1025,7 +1255,7 @@ struct ContentView: View {
         HStack(spacing: 10) {
             Image(systemName: "folder.fill")
                 .foregroundStyle(palette[space.colorIndex % palette.count])
-            Text((space.path as NSString).abbreviatingWithTildeInPath)
+            Text(displayPath(space.path))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.head)
@@ -1066,7 +1296,20 @@ struct ContentView: View {
             .padding(16)
         }
         .overlay {
-            if filtered.isEmpty {
+            if store.tab == .stored && !store.hasSourceAccess {
+                VStack(spacing: 8) {
+                    Image(systemName: "folder.badge.questionmark")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.tertiary)
+                    Text("Kies eerst je screenshotmap")
+                        .font(.headline)
+                    Text("Screenshot Hub mag alleen bij mappen die je zelf kiest.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Button("Kies map…") { store.chooseSourceFolder() }
+                        .padding(.top, 4)
+                }
+            } else if filtered.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "photo.on.rectangle")
                         .font(.system(size: 40))
@@ -1304,7 +1547,7 @@ struct HotSpaceTile: View {
                         Text(space.name)
                             .font(.headline)
                             .lineLimit(1)
-                        Text((space.path as NSString).abbreviatingWithTildeInPath)
+                        Text(displayPath(space.path))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
