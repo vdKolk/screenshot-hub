@@ -1,70 +1,76 @@
-# Wijzigingen
+# Changelog
 
-Het versienummer staat in `VERSION`. Het buildnummer is het aantal commits; samen met de commit en de builddatum zie je het in **Screenshot Hub › Over Screenshot Hub**.
+The version number is in `VERSION`. The build number is the number of commits; together with the commit and the build date you can see it in **Screenshot Hub › About Screenshot Hub**.
+
+## 1.4.0
+
+- **English**: the app, the code, the documentation and the release notes are now in English. Saved screenshots are named the way English macOS names them: `Screenshot 2026-10-21 at 09.41.22.png`.
+- The rolling pre-release is now called **Latest build** (tag `latest-build`).
+- The DMG shortcut to the Applications folder is now called "Applications".
 
 ## 1.3.0
 
-- **Updatemelding**: de app kijkt hooguit één keer per dag bij GitHub of er een nieuwere versie is en toont dan bovenin een melding met een knop naar de release. **Niet nu** verbergt de melding tot de volgende versie.
-- **Screenshot Hub › Controleer op updates…** controleert direct; **Dagelijks controleren op updates** zet de check aan of uit (standaard aan). De eerste keer legt de app uit dat hij contact maakt met GitHub.
-- De app downloadt of installeert niets zelf. Alleen tags als `v1.2.3` tellen mee, het antwoord mag hooguit 2 MB zijn, en de link naar de release maakt de app zelf.
-- Nieuw recht `com.apple.security.network.client`, alleen voor deze check. Het Over-venster laat zien of de check aan staat.
+- **Update notice**: at most once a day the app checks GitHub for a newer version and then shows a notice at the top with a button to the release. **Not Now** hides the notice until the next version.
+- **Screenshot Hub › Check for Updates…** checks right away; **Check for Updates Daily** turns the check on or off (on by default). The first time, the app explains that it contacts GitHub.
+- The app downloads or installs nothing itself. Only tags like `v1.2.3` count, the response may be at most 2 MB, and the app builds the link to the release itself.
+- New entitlement `com.apple.security.network.client`, only for this check. The About window shows whether the check is on.
 
 ## 1.2.0
 
-Gegevensbescherming:
+Data protection:
 
-- Opgeslagen screenshots en kopieën krijgen rechten 0600 (alleen de eigenaar); ook tijdelijke bestanden zijn alleen voor de eigenaar.
-- Weggegooide of opgeslagen screenshots verdwijnen uit het geheugen zodra Ongedaan maken verloopt (na 6 seconden), in plaats van bewaard te blijven tot de volgende actie.
-- Een tijdelijk opnamebestand dat na een crash achterbleef, wordt bij de volgende start opgeruimd.
+- Saved screenshots and copies get permissions 0600 (owner only); temporary files are owner-only as well.
+- Discarded or saved screenshots leave memory as soon as Undo expires (after 6 seconds), instead of being kept until the next action.
+- A temporary capture file left behind after a crash is cleaned up on the next launch.
 
-Bestandsafhandeling:
+File handling:
 
-- Opslaan, kopiëren en verplaatsen gaan via een tijdelijk bestand in dezelfde map en een hernoeming die nooit overschrijft (`renamex_np` met `RENAME_EXCL`). Een onderbroken opslag laat geen half bestand achter.
-- Gesleepte bestanden moeten echt een afbeelding zijn (ImageIO controleert de inhoud), niet alleen de juiste extensie hebben.
-- Namen van gesleepte bestanden worden opgeschoond: geen pad- of stuurtekens, niet verborgen, maximaal 200 bytes.
+- Saving, copying and moving go through a temporary file in the same folder and a rename that never overwrites (`renamex_np` with `RENAME_EXCL`). An interrupted save leaves no partial file behind.
+- Dragged files must really be images (ImageIO checks the contents), not just have the right extension.
+- Names of dragged files are sanitized: no path or control characters, not hidden, at most 200 bytes.
 
-Foutafhandeling:
+Error handling:
 
-- Foutmeldingen zijn begrijpelijk en bevatten geen bestandsnamen of paden.
-- Meldingen bij een mislukte schermopname, een onleesbaar bestand en een Hot Space waarvan de toegang is ingetrokken.
-- Ongedaan maken dat niet lukt, zegt nu ook waarom.
+- Error messages are understandable and contain no file names or paths.
+- Notices for a failed screen capture, an unreadable file and a Hot Space whose access was revoked.
+- An Undo that fails now says why.
 
 Build:
 
-- `bash build.sh --release` voor builds om te delen: weigert zonder Developer ID, zonder notarisatie of met niet-gecommitte wijzigingen.
-- De dirty-markering kijkt alleen nog naar de bestanden waaruit de app wordt gebouwd, inclusief bestanden die nog niet in git staan.
-- Swift-toolchain en macOS SDK staan in Info.plist en in het Over-venster.
-- `bash build.sh --dmg` maakt een DMG in `dist/` met de app en een snelkoppeling naar Programma's; `--release` maakt die DMG ook, en ondertekent, notariseert en staplet hem.
+- `bash build.sh --release` for builds you share: refuses without a Developer ID, without notarization or with uncommitted changes.
+- The dirty marker only looks at the files the app is built from, including files not yet in git.
+- Swift toolchain and macOS SDK are recorded in Info.plist and shown in the About window.
+- `bash build.sh --dmg` creates a DMG in `dist/` with the app and a shortcut to Applications; `--release` creates that DMG as well, and signs, notarizes and staples it.
 
 Releases:
 
-- GitHub Actions bouwt de app en de DMG bij elke pull request en elke wijziging op main. De pre-release **Laatste build** bevat altijd de nieuwste build van main, en elke nieuwe versie in `VERSION` krijgt een eigen release met de DMG.
+- GitHub Actions builds the app and the DMG on every pull request and every change to main. The **Latest build** pre-release always holds the newest build of main, and every new version in `VERSION` gets its own release with the DMG.
 
 ## 1.1.0
 
-Beveiliging:
+Security:
 
-- App Sandbox aan: de app kan alleen bij mappen die je zelf kiest en bij bestanden die je naar de app sleept. Geen netwerktoegang.
-- Screenshotmap en Hot Spaces worden onthouden met security-scoped bookmarks.
-- Hardened Runtime aan.
-- Klembord ophalen staat standaard uit en slaat vertrouwelijke, tijdelijke en automatisch gemaakte klembordinhoud over (`org.nspasteboard.*`).
-- `build.sh` kan ondertekenen met een Developer ID en de app laten notariseren.
+- App Sandbox on: the app can only access folders you choose yourself and files you drag onto the app. No network access.
+- Screenshot folder and Hot Spaces are remembered with security-scoped bookmarks.
+- Hardened Runtime on.
+- Clipboard capture is off by default and skips confidential, transient and auto-generated clipboard content (`org.nspasteboard.*`).
+- `build.sh` can sign with a Developer ID and have the app notarized.
 
-Overig:
+Other:
 
-- Over-venster met versie, build, commit, builddatum, macOS-versie en de status van sandbox, Hardened Runtime en handtekening; **Kopieer versie-informatie** in het app-menu.
-- Nederlands als basistaal van de app.
+- About window with version, build, commit, build date, macOS version and the status of the sandbox, Hardened Runtime and signature; **Copy Version Information** in the app menu.
+- Dutch as the app's base language (English since 1.4.0).
 
-Let op: instellingen staan nu in de sandboxcontainer. Kies je screenshotmap opnieuw en voeg je Hot Spaces opnieuw toe.
+Note: settings now live in the sandbox container. Choose your screenshot folder again and add your Hot Spaces again.
 
 ## 1.0.0
 
-Eerste versie.
+First version.
 
-- Tabs **In geheugen** en **Opgeslagen**; een Hot Space opent als eigen tab.
-- Screenshot maken vanuit de app (⌘N) en ophalen van het klembord.
-- Opslaan per kaart, ⌘S, ⌘⇧S of via Hot Spaces (slepen, klikken, ⌘1 t/m ⌘9).
-- Ongedaan maken na opslaan, verplaatsen, kopiëren en weggooien.
-- Hot Spaces volgen hun map als die wordt hernoemd of verplaatst.
-- Waarschuwing bij stoppen als er nog screenshots in het geheugen staan.
-- Bouwt met alleen de Command Line Tools, inclusief app-icoon.
+- **In Memory** and **Saved** tabs; a Hot Space opens as its own tab.
+- Take screenshots from the app (⌘N) and capture them from the clipboard.
+- Save per card, ⌘S, ⌘⇧S or through Hot Spaces (drag, click, ⌘1 to ⌘9).
+- Undo after saving, moving, copying and discarding.
+- Hot Spaces follow their folder when it is renamed or moved.
+- Warning on quit when screenshots are still in memory.
+- Builds with only the Command Line Tools, including the app icon.

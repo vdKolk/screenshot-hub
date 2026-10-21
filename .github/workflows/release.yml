@@ -1,19 +1,19 @@
-# Bouwt Screenshot Hub bij elke wijziging.
+# Builds Screenshot Hub on every change.
 #
-# - Pull request: app en DMG bouwen als controle; de DMG staat als artefact bij de run.
-# - Push naar main: de pre-release "Laatste build" wordt vervangen door een build van die commit.
-#   Bestaat de tag v<VERSION> nog niet, dan komt er ook een release voor die versie bij.
+# - Pull request: build the app and DMG as a check; the DMG is attached to the run as an artifact.
+# - Push to main: the "Latest build" pre-release is replaced by a build of that commit.
+#   If the tag v<VERSION> does not exist yet, a release for that version is created as well.
 #
-# Ondertekenen en notariseren gebeurt alleen bij een push naar main, en alleen als de secrets
-# hieronder zijn ingesteld (Settings › Secrets and variables › Actions). Zonder secrets worden
-# het niet-genotariseerde pre-releases.
-#   MACOS_CERTIFICATE_P12       Developer ID Application-certificaat met sleutel, base64 (.p12)
-#   MACOS_CERTIFICATE_PASSWORD  wachtwoord van dat .p12-bestand
-#   NOTARY_API_KEY              App Store Connect API-sleutel (inhoud van het .p8-bestand)
-#   NOTARY_KEY_ID               id van die sleutel
-#   NOTARY_ISSUER_ID            issuer-id van je App Store Connect-team
+# Signing and notarization only happen on a push to main, and only when the secrets below are
+# set (Settings › Secrets and variables › Actions). Without secrets the releases are
+# non-notarized pre-releases.
+#   MACOS_CERTIFICATE_P12       Developer ID Application certificate with key, base64 (.p12)
+#   MACOS_CERTIFICATE_PASSWORD  password of that .p12 file
+#   NOTARY_API_KEY              App Store Connect API key (contents of the .p8 file)
+#   NOTARY_KEY_ID               id of that key
+#   NOTARY_ISSUER_ID            issuer id of your App Store Connect team
 
-name: Build en release
+name: Build and release
 
 on:
   pull_request:
@@ -24,15 +24,15 @@ on:
 permissions:
   contents: read
 
-# Builds van main na elkaar, zodat releases niet door elkaar lopen; een PR-build wordt
-# afgebroken als er een nieuwere commit is.
+# Builds of main run one after another so releases do not interleave; a PR build is
+# cancelled when a newer commit arrives.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
-    name: Bouwen
+    name: Build
     runs-on: macos-latest
     timeout-minutes: 30
     outputs:
@@ -42,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Volledige historie: build.sh telt de commits voor het buildnummer.
+          # Full history: build.sh counts the commits for the build number.
           fetch-depth: 0
           persist-credentials: false
 
@@ -52,7 +52,7 @@ jobs:
           swiftc --version
           xcrun --show-sdk-version
 
-      - name: Developer ID klaarzetten
+      - name: Set up Developer ID
         id: signing
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -63,10 +63,10 @@ jobs:
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
         run: |
           if [ -z "$P12" ] || [ -z "$NOTARY_API_KEY" ]; then
-            echo "Geen Developer ID-secrets ingesteld: de build wordt niet genotariseerd."
+            echo "No Developer ID secrets set: the build will not be notarized."
             exit 0
           fi
-          # Een tijdelijke sleutelhanger die alleen tijdens deze run bestaat.
+          # A temporary keychain that only exists during this run.
           KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
@@ -87,13 +87,13 @@ jobs:
           IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
             | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -n 1)"
           if [ -z "$IDENTITY" ]; then
-            echo "Het certificaat bevat geen Developer ID Application-identiteit."
+            echo "The certificate does not contain a Developer ID Application identity."
             exit 1
           fi
           echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
           echo "keychain=$KEYCHAIN" >> "$GITHUB_OUTPUT"
 
-      - name: App en DMG bouwen
+      - name: Build app and DMG
         id: build
         env:
           IDENTITY: ${{ steps.signing.outputs.identity }}
@@ -110,7 +110,7 @@ jobs:
           echo "dmg=ScreenshotHub-$VERSION.dmg" >> "$GITHUB_OUTPUT"
           plutil -p "Screenshot Hub.app/Contents/Info.plist" | grep -E 'Version|ScreenshotHub'
 
-      - name: Sleutelhanger opruimen
+      - name: Remove keychain
         if: always() && steps.signing.outputs.keychain != ''
         env:
           KEYCHAIN: ${{ steps.signing.outputs.keychain }}
@@ -119,19 +119,19 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: dist/${{ steps.build.outputs.dmg }}
-          # De DMG zelf, niet ingepakt in een zip.
+          # The DMG itself, not wrapped in a zip.
           archive: false
           retention-days: 14
           if-no-files-found: error
 
   release:
-    name: Release bijwerken
+    name: Update releases
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      # Alleen deze job mag releases en tags maken; de job die de code bouwt niet.
+      # Only this job may create releases and tags; the job that builds the code may not.
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
@@ -150,42 +150,42 @@ jobs:
           name: ${{ needs.build.outputs.dmg }}
           path: dist
 
-      - name: Release-notes opstellen
+      - name: Write release notes
         run: |
           SHORT="${SHA:0:7}"
-          # Het stuk uit CHANGELOG.md voor deze versie.
+          # The section of CHANGELOG.md for this version.
           awk -v v="## $VERSION" '$0 == v {found=1; next} found && /^## / {exit} found' CHANGELOG.md \
             | sed '/./,$!d' > changes.md
           {
-            echo "Build van commit $SHORT."
+            echo "Build of commit $SHORT."
             echo
             if [ "$NOTARIZED" = "true" ]; then
-              echo "Ondertekend met een Developer ID en genotariseerd door Apple. Open de DMG en sleep Screenshot Hub naar Programma's."
+              echo "Signed with a Developer ID and notarized by Apple. Open the DMG and drag Screenshot Hub to Applications."
             else
-              echo "**Testversie: niet genotariseerd.** macOS blokkeert de app de eerste keer. Zo open je hem toch:"
+              echo "**Test build: not notarized.** macOS blocks the app the first time. To open it anyway:"
               echo
-              echo "1. Open de DMG en sleep Screenshot Hub naar Programma's."
-              echo "2. Start de app en klik in de melding op Klaar."
-              echo "3. Ga naar Systeeminstellingen › Privacy en beveiliging en klik bij Screenshot Hub op Open toch."
+              echo "1. Open the DMG and drag Screenshot Hub to Applications."
+              echo "2. Start the app and click Done in the alert."
+              echo "3. Go to System Settings › Privacy & Security and click Open Anyway for Screenshot Hub."
               echo
-              echo "Alleen voor mensen die weten van wie de app komt."
+              echo "Only for people who know where the app comes from."
             fi
             echo
-            echo "Werkt op Macs met Apple silicon en macOS 13 of nieuwer."
+            echo "Runs on Macs with Apple silicon and macOS 13 or later."
           } > install.md
-          { cat install.md; echo; echo "## Wijzigingen in $VERSION"; echo; cat changes.md; } > notes-version.md
-          { echo "De nieuwste build van main. Wordt bij elke wijziging vervangen."; echo; cat install.md; } > notes-latest.md
+          { cat install.md; echo; echo "## Changes in $VERSION"; echo; cat changes.md; } > notes-version.md
+          { echo "The newest build of main. Replaced on every change."; echo; cat install.md; } > notes-latest.md
 
-      - name: Laatste build vervangen
+      - name: Replace latest build
         run: |
-          gh release delete laatste-build --yes --cleanup-tag || true
-          gh release create laatste-build "dist/$DMG" --prerelease --latest=false \
-            --target "$SHA" --title "Laatste build ($VERSION, ${SHA:0:7})" --notes-file notes-latest.md
+          gh release delete latest-build --yes --cleanup-tag || true
+          gh release create latest-build "dist/$DMG" --prerelease --latest=false \
+            --target "$SHA" --title "Latest build ($VERSION, ${SHA:0:7})" --notes-file notes-latest.md
 
-      - name: Release voor deze versie
+      - name: Release for this version
         run: |
           if gh release view "v$VERSION" >/dev/null 2>&1; then
-            echo "Release v$VERSION bestaat al; verhoog VERSION voor een nieuwe release."
+            echo "Release v$VERSION already exists; bump VERSION for a new release."
             exit 0
           fi
           if [ "$NOTARIZED" = "true" ]; then

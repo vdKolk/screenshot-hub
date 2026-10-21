@@ -1,10 +1,10 @@
 // AppIcon.swift
 //
-// Tekent het app-icoon van Screenshot Hub: een zoeker met twee screenshots erin,
-// de achterste nog gestippeld (in het geheugen), de voorste opgeslagen.
-// build.sh draait dit script en maakt er met iconutil een .icns van.
+// Draws the Screenshot Hub app icon: a viewfinder with two screenshots in it,
+// the back one dashed (still in memory), the front one saved.
+// build.sh runs this script and turns the result into an .icns with iconutil.
 //
-// Gebruik: swift AppIcon.swift <map.iconset>
+// Usage: swift AppIcon.swift <folder.iconset>
 
 import AppKit
 
@@ -18,7 +18,7 @@ func color(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
             alpha: alpha)
 }
 
-/// Voert `body` uit in een assenstelsel gedraaid om `center`.
+/// Runs `body` in a coordinate system rotated around `center`.
 func rotated(_ degrees: CGFloat, around center: NSPoint, _ body: () -> Void) {
     NSGraphicsContext.saveGraphicsState()
     let transform = NSAffineTransform()
@@ -29,9 +29,9 @@ func rotated(_ degrees: CGFloat, around center: NSPoint, _ body: () -> Void) {
     NSGraphicsContext.restoreGraphicsState()
 }
 
-/// Tekent het icoon in een vlak van 1024 × 1024 punten.
+/// Draws the icon in a 1024 × 1024 point canvas.
 func drawIcon() {
-    // Tegel op het standaard macOS-raster: 824 punten breed met 100 punten marge.
+    // Tile on the standard macOS grid: 824 points wide with a 100 point margin.
     let tile = NSBezierPath(roundedRect: NSRect(x: 100, y: 100, width: 824, height: 824),
                             xRadius: 185, yRadius: 185)
 
@@ -45,16 +45,16 @@ func drawIcon() {
     tile.fill()
     NSGraphicsContext.restoreGraphicsState()
 
-    // Indigo linksboven naar roze rechtsonder.
+    // Indigo top left to pink bottom right.
     NSGradient(colors: [color(0x4F5BFA), color(0x8B45F0), color(0xE2508F)],
                atLocations: [0, 0.55, 1],
                colorSpace: .sRGB)!
         .draw(in: tile, angle: -55)
-    // Zacht licht van boven.
+    // Soft light from the top.
     NSGradient(colors: [color(0xFFFFFF, 0.22), color(0xFFFFFF, 0)])!
         .draw(in: tile, angle: -90)
 
-    // Zoekerhoeken.
+    // Viewfinder corners.
     let frame = NSRect(x: 222, y: 222, width: 580, height: 580)
     let arm: CGFloat = 118
     let corners = NSBezierPath()
@@ -73,7 +73,7 @@ func drawIcon() {
     let center = NSPoint(x: 512, y: 500)
     let card = NSRect(x: -190, y: -136, width: 380, height: 272)
 
-    // Achterste screenshot: nog in het geheugen, dus gestippeld.
+    // Back screenshot: still in memory, so dashed.
     rotated(-11, around: NSPoint(x: center.x - 18, y: center.y + 34)) {
         let back = NSBezierPath(roundedRect: card, xRadius: 34, yRadius: 34)
         color(0xFFFFFF, 0.22).setFill()
@@ -84,7 +84,7 @@ func drawIcon() {
         back.stroke()
     }
 
-    // Voorste screenshot: opgeslagen.
+    // Front screenshot: saved.
     rotated(5, around: NSPoint(x: center.x + 20, y: center.y - 22)) {
         let front = NSBezierPath(roundedRect: card, xRadius: 34, yRadius: 34)
         NSGraphicsContext.saveGraphicsState()
@@ -97,7 +97,7 @@ func drawIcon() {
         front.fill()
         NSGraphicsContext.restoreGraphicsState()
 
-        // Een klein landschap als "afbeelding".
+        // A small landscape as the "picture".
         let picture = card.insetBy(dx: 26, dy: 26)
         let picturePath = NSBezierPath(roundedRect: picture, xRadius: 18, yRadius: 18)
         NSGraphicsContext.saveGraphicsState()
@@ -148,7 +148,7 @@ func render(pixels: Int, to url: URL) throws {
     try rep.representation(using: .png, properties: [:])!.write(to: url)
 }
 
-// De namen die iconutil verwacht.
+// The file names iconutil expects.
 for size in [16, 32, 128, 256, 512] {
     try render(pixels: size, to: output.appendingPathComponent("icon_\(size)x\(size).png"))
     try render(pixels: size * 2, to: output.appendingPathComponent("icon_\(size)x\(size)@2x.png"))

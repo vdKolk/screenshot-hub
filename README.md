@@ -1,124 +1,126 @@
 # Screenshot Hub
 
-**Shoot first, store later.** Een kleine macOS-app waarin screenshots eerst in het geheugen komen. Pas als je ze opslaat worden het bestanden: in je screenshotmap of meteen in de juiste map via een Hot Space.
+**Shoot first, store later.** A small macOS app where screenshots land in memory first. They only become files when you save them: in your screenshot folder, or straight into the right folder through a Hot Space.
 
 ![Screenshot Hub](docs/screenshot.png)
 
-## Wat het doet
+## What it does
 
-- **In geheugen**: screenshots die nog niet zijn opgeslagen.
-  - Maak er een met de knop **Screenshot maken** (⌘N): kies een gebied, of druk op spatie voor een venster.
-  - Of zet **Klembord ophalen** aan (standaard uit) en maak er een naar het klembord met ⌃⌘⇧4. Afbeeldingen die een app als vertrouwelijk of tijdelijk markeert, zoals uit een wachtwoordmanager, worden overgeslagen.
-  - Opslaan kan per kaart, met ⌘S voor de selectie of met **Alles opslaan** (⌘⇧S).
-- **Opgeslagen**: wat er in je screenshotmap staat. Die map kies je zelf, bijvoorbeeld de map die macOS gebruikt (te zien bij ⌘⇧5 › Opties).
-- **Hot Spaces**: mappen in de zijbalk waar je screenshots naartoe stuurt.
-  - Sleep een screenshot op een Hot Space, klik erop met een selectie, of druk ⌘1 t/m ⌘9.
-  - Screenshots uit het geheugen worden daar opgeslagen. Opgeslagen screenshots worden verplaatst of gekopieerd, naar keuze.
-  - Klik op een Hot Space zonder selectie, of op het oog, om te zien wat erin staat.
-  - Hernoem of verplaats je de map in Finder, dan blijft de Hot Space gewoon werken.
-- **Ongedaan maken**: na opslaan, verplaatsen, kopiëren of weggooien staat er een knop in de melding onderin.
-- **Updatemelding**: de app kijkt één keer per dag of er een nieuwe versie op GitHub staat en meldt dat bovenin het venster, met een knop naar de release. Handmatig kan via **Screenshot Hub › Controleer op updates…**.
-- **Veilig stoppen**: staan er nog screenshots in het geheugen, dan vraagt de app bij stoppen of je ze wilt opslaan.
+- **In Memory**: screenshots that have not been saved yet.
+  - Take one with the **Take Screenshot** button (⌘N): select an area, or press Space for a window.
+  - Or turn on **Clipboard Capture** (off by default) and take one to the clipboard with ⌃⌘⇧4. Images an app marks as confidential or transient, such as from a password manager, are skipped.
+  - Save per card, with ⌘S for the selection, or with **Save All** (⌘⇧S).
+- **Saved**: what is in your screenshot folder. You choose that folder yourself, for example the one macOS uses (see ⌘⇧5 › Options).
+- **Hot Spaces**: folders in the sidebar you send screenshots to.
+  - Drag a screenshot onto a Hot Space, click it with a selection, or press ⌘1 to ⌘9.
+  - Screenshots from memory are saved there. Saved screenshots are moved or copied, your choice.
+  - Click a Hot Space without a selection, or click its eye, to see what is in it.
+  - If you rename or move the folder in Finder, the Hot Space keeps working.
+- **Undo**: after saving, moving, copying or discarding, the notice at the bottom has an Undo button.
+- **Update notice**: once a day the app checks GitHub for a newer version and shows a notice at the top of the window with a button to the release. Check manually via **Screenshot Hub › Check for Updates…**.
+- **Safe quit**: if screenshots are still in memory, the app asks whether to save them when you quit.
 
-## Sneltoetsen
+## Keyboard shortcuts
 
-| Toets | Actie |
+| Key | Action |
 | --- | --- |
-| ⌘N | Nieuwe screenshot in het geheugen |
-| ⌘S | Geselecteerde screenshots opslaan in de screenshotmap |
-| ⌘⇧S | Alles uit het geheugen opslaan |
-| ⌘1 t/m ⌘9 | Selectie naar Hot Space 1 t/m 9 |
-| Esc | Selectie wissen |
-| Klik, ⌘-klik, ⇧-klik | Selecteren, toevoegen of weghalen, reeks selecteren |
-| Dubbelklik | Opgeslagen screenshot openen |
+| ⌘N | New screenshot in memory |
+| ⌘S | Save selected screenshots to the screenshot folder |
+| ⌘⇧S | Save everything in memory |
+| ⌘1 to ⌘9 | Send selection to Hot Space 1 to 9 |
+| Esc | Clear selection |
+| Click, ⌘-click, ⇧-click | Select, add or remove, select a range |
+| Double-click | Open a saved screenshot |
 
-## Bouwen
+## Building
 
-Nodig: macOS 13 of nieuwer en de Command Line Tools. Xcode is niet nodig.
+Requires macOS 13 or later and the Command Line Tools. Xcode is not needed.
 
 ```sh
-xcode-select --install   # eenmalig, als je de Command Line Tools nog niet hebt
+xcode-select --install   # once, if you do not have the Command Line Tools yet
 bash build.sh
 open "Screenshot Hub.app"
 ```
 
-`build.sh` compileert de app, tekent het icoon en ondertekent de app met App Sandbox en Hardened Runtime. Sleep `Screenshot Hub.app` daarna naar Programma's.
+`build.sh` compiles the app, draws the icon and signs the app with App Sandbox and Hardened Runtime. Then drag `Screenshot Hub.app` to Applications.
 
-`bash build.sh` maakt een **lokale build**: ad-hoc ondertekend, alleen voor je eigen Mac. Gatekeeper weigert hem op andere Macs.
+`bash build.sh` creates a **local build**: ad hoc signed, for your own Mac only. Gatekeeper rejects it on other Macs.
 
-**Alles wat je deelt, bouw je met `--release`.** Dat ondertekent met een Developer ID, laat Apple de app notariseren en weigert te bouwen als de bronbestanden afwijken van de commit. Zo hoort een gedeelde app altijd bij een bekende commit.
+**Build everything you share with `--release`.** That signs with a Developer ID, has Apple notarize the app, and refuses to build when the source files differ from the commit. That way a shared app always belongs to a known commit.
 
 ```sh
-# eenmalig: inloggegevens voor notarisatie in de sleutelhanger zetten
-xcrun notarytool store-credentials screenshothub --apple-id <e-mail> --team-id <TEAMID>
+# once: store the notarization credentials in the keychain
+xcrun notarytool store-credentials screenshothub --apple-id <email> --team-id <TEAMID>
 
-SIGN_IDENTITY="Developer ID Application: <Naam> (<TEAMID>)" NOTARY_PROFILE=screenshothub bash build.sh --release
+SIGN_IDENTITY="Developer ID Application: <Name> (<TEAMID>)" NOTARY_PROFILE=screenshothub bash build.sh --release
 ```
 
-## Delen als DMG
+## Sharing as a DMG
 
-Een DMG is een schijfkopie met de app en een snelkoppeling naar Programma's. Wie hem opent, sleept de app naar Programma's en kan hem starten. De app werkt op Macs met Apple silicon en macOS 13 of nieuwer.
+A DMG is a disk image with the app and a shortcut to Applications. Whoever opens it drags the app to Applications and can start it. The app runs on Macs with Apple silicon and macOS 13 or later.
 
-**Om te delen: `bash build.sh --release`.** Daarmee ondertekent `build.sh` de app en de DMG met je Developer ID en laat hij beide notariseren door Apple. Het resultaat komt in `dist/ScreenshotHub-<versie>.dmg`. Ontvangers krijgen geen waarschuwing van macOS. Zie [Bouwen](#bouwen) voor `SIGN_IDENTITY` en `NOTARY_PROFILE`.
+**To share: `bash build.sh --release`.** With it, `build.sh` signs the app and the DMG with your Developer ID and has Apple notarize both. The result is `dist/ScreenshotHub-<version>.dmg`. Recipients get no warning from macOS. See [Building](#building) for `SIGN_IDENTITY` and `NOTARY_PROFILE`.
 
-**Zonder Developer ID: `bash build.sh --dmg`.** Dat maakt dezelfde DMG, maar niet genotariseerd. macOS blokkeert de app dan op een andere Mac met de melding dat Apple hem niet kan controleren. De ontvanger kan hem zo toch openen:
+**Without a Developer ID: `bash build.sh --dmg`.** That creates the same DMG, but not notarized. macOS then blocks the app on another Mac, saying Apple cannot check it. The recipient can still open it like this:
 
-1. Open de DMG en sleep **Screenshot Hub** naar **Programma's**.
-2. Start de app. Klik in de melding op **Klaar**.
-3. Ga naar **Systeeminstellingen › Privacy en beveiliging**, scrol naar beneden en klik bij Screenshot Hub op **Open toch**. Bevestig met je wachtwoord.
+1. Open the DMG and drag **Screenshot Hub** to **Applications**.
+2. Start the app. Click **Done** in the alert.
+3. Go to **System Settings › Privacy & Security**, scroll down and click **Open Anyway** for Screenshot Hub. Confirm with your password.
 
-Gebruik dit alleen om te testen met mensen die weten van wie de app komt: zo zetten ze een beveiligingscontrole van macOS voor deze app uit. Op beheerde Macs kan het bedrijfsbeleid dit ook tegenhouden.
+Only use this for testing with people who know where the app comes from: they turn off a macOS security check for this app. On managed Macs, company policy may block it.
 
-Bij het eerste gebruik vraagt de app om de screenshotmap, en bij **Screenshot maken** vraagt macOS om toestemming voor schermopname.
+On first use the app asks for the screenshot folder, and for **Take Screenshot** macOS asks for screen recording permission.
 
 ## Releases via GitHub Actions
 
-`.github/workflows/release.yml` bouwt de app en de DMG op een macOS-runner van GitHub:
+`.github/workflows/release.yml` builds the app and the DMG on a GitHub macOS runner:
 
-- **Bij een pull request** als controle. De DMG staat 14 dagen als artefact bij de run.
-- **Bij elke wijziging op `main`** wordt de pre-release **Laatste build** vervangen door de nieuwste build. Bestaat er voor de versie in `VERSION` nog geen release (tag `v<versie>`), dan maakt de workflow die ook aan, met het stuk uit `CHANGELOG.md` als notes.
+- **On a pull request** as a check. The DMG is attached to the run as an artifact for 14 days.
+- **On every change to `main`** the **Latest build** pre-release is replaced by the newest build. If the version in `VERSION` has no release yet (tag `v<version>`), the workflow creates it too, with the matching section of `CHANGELOG.md` as notes.
 
-Een nieuwe versie uitbrengen: verhoog `VERSION`, zet de wijzigingen onder een nieuwe kop in `CHANGELOG.md` en merge naar `main`.
+To release a new version: bump `VERSION`, add the changes under a new heading in `CHANGELOG.md`, and merge to `main`.
 
-**Notariseren in de workflow.** Zonder secrets maakt de workflow niet-genotariseerde pre-releases, met de installatiestappen in de notes. Met deze secrets (Settings › Secrets and variables › Actions) ondertekent en notariseert hij via `build.sh --release`, en wordt een nieuwe versie een gewone release:
+**Notarizing in the workflow.** Without secrets the workflow creates non-notarized pre-releases with the installation steps in the notes. With these secrets (Settings › Secrets and variables › Actions) it signs and notarizes through `build.sh --release`, and a new version becomes a regular release:
 
-| Secret | Inhoud |
+| Secret | Contents |
 | --- | --- |
-| `MACOS_CERTIFICATE_P12` | Developer ID Application-certificaat met sleutel als `.p12`, base64 (`base64 -i cert.p12 \| pbcopy`) |
-| `MACOS_CERTIFICATE_PASSWORD` | Wachtwoord van dat `.p12`-bestand |
-| `NOTARY_API_KEY` | App Store Connect API-sleutel: de inhoud van het `.p8`-bestand |
-| `NOTARY_KEY_ID` | Id van die sleutel |
-| `NOTARY_ISSUER_ID` | Issuer-id van je App Store Connect-team |
+| `MACOS_CERTIFICATE_P12` | Developer ID Application certificate with key as `.p12`, base64 (`base64 -i cert.p12 \| pbcopy`) |
+| `MACOS_CERTIFICATE_PASSWORD` | Password of that `.p12` file |
+| `NOTARY_API_KEY` | App Store Connect API key: the contents of the `.p8` file |
+| `NOTARY_KEY_ID` | Id of that key |
+| `NOTARY_ISSUER_ID` | Issuer id of your App Store Connect team |
 
-De secrets worden alleen gebruikt bij een push naar `main`, in een tijdelijke sleutelhanger die na de build wordt verwijderd. De job die de code bouwt, mag de repo alleen lezen; alleen de aparte releasejob mag releases maken.
+The secrets are only used on a push to `main`, in a temporary keychain that is deleted after the build. The job that builds the code can only read the repository; only the separate release job may create releases.
 
-**Kosten.** Bij een private repo telt GitHub minuten op een macOS-runner tien keer zo zwaar als op Linux. Een build duurt een paar minuten en kost dus zo'n 20 tot 40 minuten van je tegoed.
+**Cost.** GitHub Actions minutes are free for public repositories. On a private repository, macOS runner minutes count ten times as heavily as Linux ones, so a build of a few minutes would cost about 20 to 40 minutes of your allowance.
 
-## Versie
+## Version
 
-Het versienummer staat in `VERSION`. `build.sh` voegt daar het buildnummer (aantal commits), de commit en de builddatum aan toe. Zit er niet-gecommit werk in de build, dan staat er `-dirty` achter de commit.
+The version number is in `VERSION`. `build.sh` adds the build number (number of commits), the commit and the build date. If the build contains uncommitted work, the commit has `-dirty` appended.
 
-Je ziet alles via **Screenshot Hub › Over Screenshot Hub**: versie, build, commit, builddatum, macOS-versie en de status van sandbox, Hardened Runtime en handtekening. **Kopieer versie-informatie** in hetzelfde menu zet dat als tekst op het klembord, handig bij een review of een foutmelding.
+You can see everything via **Screenshot Hub › About Screenshot Hub**: version, build, commit, build date, toolchain, macOS version and the status of the sandbox, Hardened Runtime and signature. **Copy Version Information** in the same menu puts that on the clipboard as text, handy for a review or a bug report.
 
-## Beveiliging en toestemmingen
+## Security and permissions
 
-- **App Sandbox**: de app kan alleen bij mappen die je zelf kiest (de screenshotmap en je Hot Spaces) en bij bestanden die je naar de app sleept. De keuze wordt onthouden met security-scoped bookmarks. De app heeft geen netwerktoegang. De rechten staan in `ScreenshotHub.entitlements`.
-- **Hardened Runtime**: staat aan; de app laadt geen code van buiten zijn eigen bundle.
-- **Klembord**: wordt alleen gelezen als je **Klembord ophalen** aanzet. Inhoud met de markering `org.nspasteboard.ConcealedType`, `TransientType` of `AutoGeneratedType` wordt nooit opgehaald.
-- **Schermopname**: macOS vraagt hierom de eerste keer dat je **Screenshot maken** gebruikt. Met een lokale handtekening kan macOS na elke nieuwe build opnieuw om toestemming vragen.
-- **Netwerk: alleen de updatecheck.** Hooguit één keer per dag vraagt de app bij `api.github.com` de releases van deze repo op en vergelijkt hij de hoogste versie met zijn eigen versie. Er gaat alleen dat verzoek mee (met de User-Agent `ScreenshotHub`, zonder versienummer of andere gegevens); GitHub ziet daarbij je IP-adres. De app downloadt en installeert niets zelf: bij een nieuwere versie verschijnt een melding met een knop naar de releasepagina, waarvan de link door de app zelf wordt gemaakt. Het antwoord mag hooguit 2 MB zijn en alleen tags als `v1.2.3` tellen mee. De netwerksessie bewaart geen cookies en geen cache. Het recht hiervoor is `com.apple.security.network.client`: de sandbox staat daarmee uitgaande verbindingen naar elke server toe, de beperking tot `api.github.com` zit in de code. Uitzetten kan via **Screenshot Hub › Dagelijks controleren op updates**; de eerste keer legt de app dit uit. Nog meer netwerkfuncties (delen, uploaden) vragen om een nieuwe beveiligingsreview.
-- **Screenshots als bestand** krijgen rechten 0600: alleen jij kunt ze lezen. Opslaan gebeurt via een tijdelijk bestand in dezelfde map en een hernoeming die nooit een bestaand bestand overschrijft, dus een onderbroken opslag laat geen half bestand achter.
-- **Screenshots in het geheugen** schrijft de app nergens naartoe: niet naar logbestanden (de app logt niets), niet naar een cache op schijf en niet naar Quick Look. Ze verlaten de app alleen als jij ze opslaat, kopieert of sleept. Weggooien haalt ze uit het geheugen zodra Ongedaan maken verloopt (6 seconden). Alleen **Screenshot maken** gebruikt kort een tijdelijk bestand, omdat `screencapture` niet rechtstreeks naar het geheugen kan schrijven. Dat staat in de container, is alleen voor jou leesbaar en wordt meteen na het inlezen verwijderd; na een crash ruimt de volgende start het op.
-- **Versie-informatie kopiëren** zet alleen versie, build, commit, toolchain en beveiligingsstatus op het klembord: geen paden, bestandsnamen of beeldgegevens.
-- **Instellingen** staan in de sandboxcontainer (`~/Library/Containers/local.screenshothub`). Hot Spaces uit een versie van vóór de sandbox voeg je opnieuw toe.
+- **App Sandbox**: the app can only access folders you choose yourself (the screenshot folder and your Hot Spaces) and files you drag onto the app. That choice is remembered with security-scoped bookmarks. The entitlements are in `ScreenshotHub.entitlements`.
+- **Hardened Runtime**: on; the app loads no code from outside its own bundle.
+- **Clipboard**: only read when you turn on **Clipboard Capture**. Content marked `org.nspasteboard.ConcealedType`, `TransientType` or `AutoGeneratedType` is never captured.
+- **Screen recording**: macOS asks for it the first time you use **Take Screenshot**. With a local signature, macOS may ask again after every new build.
+- **Network: only the update check.** At most once a day the app requests this repository's releases from `api.github.com` and compares the highest version with its own. Only that request is sent (with the User-Agent `ScreenshotHub`, no version number or other data); GitHub sees your IP address. The app downloads and installs nothing itself: when a newer version exists, a notice appears with a button to the release page, whose link the app builds itself. The response may be at most 2 MB and only tags like `v1.2.3` count. The network session keeps no cookies and no cache. The entitlement for this is `com.apple.security.network.client`: the sandbox then allows outgoing connections to any server; the restriction to `api.github.com` is in the code. Turn it off via **Screenshot Hub › Check for Updates Daily**; the first time, the app explains this. Any further network features (sharing, uploading) require a new security review.
+- **Screenshots as files** get permissions 0600: only you can read them. Saving goes through a temporary file in the same folder and a rename that never overwrites an existing file, so an interrupted save leaves no partial file behind.
+- **Screenshots in memory** are written nowhere by the app: not to logs (the app logs nothing), not to a cache on disk and not to Quick Look. They only leave the app when you save, copy or drag them. Discarding removes them from memory once Undo expires (6 seconds). Only **Take Screenshot** briefly uses a temporary file, because `screencapture` cannot write directly into memory. That file lives in the container, is readable only by you and is deleted right after reading; after a crash the next launch cleans it up.
+- **Copy Version Information** only puts the version, build, commit, toolchain and security status on the clipboard: no paths, file names or image data.
+- **Settings** live in the sandbox container (`~/Library/Containers/local.screenshothub`). Hot Spaces from a version before the sandbox need to be added again.
 
-## Bestanden
+## Files
 
-| Bestand | Inhoud |
+| File | Contents |
 | --- | --- |
-| `ScreenshotHub.swift` | De hele app (SwiftUI) |
-| `AppIcon.swift` | Tekent het app-icoon; `build.sh` maakt er een `.icns` van |
-| `ScreenshotHub.entitlements` | Rechten van de app (App Sandbox) |
-| `VERSION` | Het versienummer; zie `CHANGELOG.md` voor wat er per versie veranderde |
-| `build.sh` | Bouwt en ondertekent `Screenshot Hub.app`, en notariseert hem desgewenst |
-| `docs/screenshot.png` | De afbeelding hierboven |
+| `ScreenshotHub.swift` | The whole app (SwiftUI) |
+| `AppIcon.swift` | Draws the app icon; `build.sh` turns it into an `.icns` |
+| `ScreenshotHub.entitlements` | The app's entitlements (App Sandbox) |
+| `VERSION` | The version number; see `CHANGELOG.md` for what changed per version |
+| `build.sh` | Builds and signs `Screenshot Hub.app`, and optionally notarizes it |
+| `.github/workflows/release.yml` | Builds on every pull request and change to `main`, and publishes releases |
+| `CLAUDE.md` | Conventions and agreements for working on this repository |
+| `docs/screenshot.png` | The image above |
