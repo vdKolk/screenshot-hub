@@ -1,12 +1,12 @@
 #!/bin/bash
-# Bouwt "Screenshot Hub.app" uit ScreenshotHub.swift.
+# Builds "Screenshot Hub.app" from ScreenshotHub.swift.
 #
-# Gebruik:
-#   bash build.sh            lokale build voor je eigen Mac (ad-hoc ondertekend)
-#   bash build.sh --dmg      lokale build plus een DMG in dist/, om te testen of uit te proberen
-#   bash build.sh --release  build om te delen: vereist een schone git-stand, een Developer ID
-#                            (SIGN_IDENTITY) en notarisatie (NOTARY_PROFILE); maakt ook een
-#                            ondertekende en genotariseerde DMG in dist/
+# Usage:
+#   bash build.sh            local build for your own Mac (ad hoc signed)
+#   bash build.sh --dmg      local build plus a DMG in dist/, for testing or trying it out
+#   bash build.sh --release  build for sharing: requires a clean git state, a Developer ID
+#                            (SIGN_IDENTITY) and notarization (NOTARY_PROFILE); also creates
+#                            a signed and notarized DMG in dist/
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -16,22 +16,22 @@ for arg in "$@"; do
   case "$arg" in
     --release) RELEASE=1; MAKE_DMG=1 ;;
     --dmg) MAKE_DMG=1 ;;
-    *) echo "Onbekende optie: $arg (gebruik: bash build.sh [--dmg] [--release])"; exit 1 ;;
+    *) echo "Unknown option: $arg (usage: bash build.sh [--dmg] [--release])"; exit 1 ;;
   esac
 done
 
 if ! command -v swiftc >/dev/null 2>&1; then
-  echo "swiftc niet gevonden. Installeer eerst de Command Line Tools: xcode-select --install"
+  echo "swiftc not found. Install the Command Line Tools first: xcode-select --install"
   exit 1
 fi
 
 APP="Screenshot Hub.app"
 EXE="ScreenshotHub"
 
-# Versie uit VERSION; buildnummer, commit en datum uit git. Het Over-venster toont ze.
+# Version from VERSION; build number, commit and date from git. The About window shows them.
 VERSION="$(tr -d '[:space:]' < VERSION)"
-# De bestanden waaruit de app wordt gebouwd. Wijkt een daarvan af van de commit (gewijzigd of
-# nog niet in git), dan is de build "dirty" en hoort hij niet bij een bekende commit.
+# The files the app is built from. If one of them differs from the commit (modified or not
+# yet in git), the build is "dirty" and does not belong to a known commit.
 INPUTS=(ScreenshotHub.swift AppIcon.swift ScreenshotHub.entitlements VERSION build.sh)
 DIRTY=0
 if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
@@ -43,29 +43,29 @@ if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
   fi
 else
   BUILD_NUMBER="0"
-  COMMIT="onbekend"
+  COMMIT="unknown"
   DIRTY=1
 fi
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-# Waarmee gebouwd is, voor het Over-venster.
+# What the app was built with, for the About window.
 TOOLCHAIN="$(swiftc --version 2>/dev/null | head -n 1 | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
-SDK_VERSION="$(xcrun --show-sdk-version 2>/dev/null || echo onbekend)"
+SDK_VERSION="$(xcrun --show-sdk-version 2>/dev/null || echo unknown)"
 
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 if [ "$RELEASE" = 1 ]; then
-  # Een build om te delen moet bij een bekende commit horen en door Apple te controleren zijn.
+  # A build for sharing must belong to a known commit and be verifiable by Apple.
   if [ "$DIRTY" = 1 ]; then
-    echo "--release: commit eerst je wijzigingen in: ${INPUTS[*]}"
+    echo "--release: commit your changes first in: ${INPUTS[*]}"
     git status --short -- "${INPUTS[@]}" || true
     exit 1
   fi
   if [ "$SIGN_IDENTITY" = "-" ] || [ -z "${NOTARY_PROFILE:-}" ]; then
-    echo "--release: zet SIGN_IDENTITY (Developer ID Application: …) en NOTARY_PROFILE; zie README."
+    echo "--release: set SIGN_IDENTITY (Developer ID Application: …) and NOTARY_PROFILE; see README."
     exit 1
   fi
 fi
 
-echo "Bouwen: versie $VERSION, build $BUILD_NUMBER ($COMMIT) voor $(uname -m)..."
+echo "Building: version $VERSION, build $BUILD_NUMBER ($COMMIT) for $(uname -m)..."
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -74,10 +74,10 @@ swiftc -O -parse-as-library \
   ScreenshotHub.swift \
   -o "$APP/Contents/MacOS/$EXE"
 
-# Icoon: alleen opnieuw tekenen als AppIcon.swift veranderd is.
+# Icon: only redrawn when AppIcon.swift has changed.
 ICON=".build/AppIcon.icns"
 if [ ! -f "$ICON" ] || [ AppIcon.swift -nt "$ICON" ]; then
-  echo "Icoon tekenen..."
+  echo "Drawing icon..."
   rm -rf .build/AppIcon.iconset
   mkdir -p .build
   swift AppIcon.swift .build/AppIcon.iconset
@@ -95,7 +95,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>local.screenshothub</string>
   <key>CFBundleExecutable</key><string>ScreenshotHub</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleDevelopmentRegion</key><string>nl</string>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
@@ -105,14 +105,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>ScreenshotHubSDK</key><string>$SDK_VERSION</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSDesktopFolderUsageDescription</key><string>Screenshot Hub toont en verplaatst screenshots op je bureaublad.</string>
-  <key>NSDocumentsFolderUsageDescription</key><string>Screenshot Hub slaat screenshots op in mappen in Documenten.</string>
-  <key>NSDownloadsFolderUsageDescription</key><string>Screenshot Hub slaat screenshots op in mappen in Downloads.</string>
+  <key>NSDesktopFolderUsageDescription</key><string>Screenshot Hub shows and moves screenshots on your desktop.</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>Screenshot Hub saves screenshots to folders in Documents.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>Screenshot Hub saves screenshots to folders in Downloads.</string>
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>
       <key>UTTypeIdentifier</key><string>local.screenshothub.memory-shot</string>
-      <key>UTTypeDescription</key><string>Screenshot in geheugen</string>
+      <key>UTTypeDescription</key><string>Screenshot in memory</string>
       <key>UTTypeConformsTo</key><array><string>public.data</string></array>
     </dict>
   </array>
@@ -120,10 +120,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ondertekenen met App Sandbox (ScreenshotHub.entitlements) en Hardened Runtime.
-# Zonder SIGN_IDENTITY is het een lokale ad-hoc handtekening: genoeg voor je eigen Mac.
-# Met een Developer ID, bijvoorbeeld SIGN_IDENTITY="Developer ID Application: Naam (TEAMID)",
-# krijgt de handtekening ook een tijdstempel, zodat Apple hem kan notariseren.
+# Sign with App Sandbox (ScreenshotHub.entitlements) and Hardened Runtime.
+# Without SIGN_IDENTITY this is a local ad hoc signature: enough for your own Mac.
+# With a Developer ID, e.g. SIGN_IDENTITY="Developer ID Application: Name (TEAMID)",
+# the signature also gets a timestamp, so Apple can notarize it.
 SIGN_ARGS=(--force --options runtime --entitlements ScreenshotHub.entitlements --sign "$SIGN_IDENTITY")
 if [ "$SIGN_IDENTITY" != "-" ]; then
   SIGN_ARGS+=(--timestamp)
@@ -131,15 +131,15 @@ fi
 codesign "${SIGN_ARGS[@]}" "$APP"
 codesign --verify --strict "$APP"
 
-# Notariseren bij Apple, alleen met een Developer ID en een opgeslagen notarytool-profiel:
-#   xcrun notarytool store-credentials <profiel> --apple-id <e-mail> --team-id <TEAMID>
-#   SIGN_IDENTITY="Developer ID Application: …" NOTARY_PROFILE=<profiel> bash build.sh
+# Notarize with Apple, only with a Developer ID and a stored notarytool profile:
+#   xcrun notarytool store-credentials <profile> --apple-id <email> --team-id <TEAMID>
+#   SIGN_IDENTITY="Developer ID Application: …" NOTARY_PROFILE=<profile> bash build.sh
 if [ -n "${NOTARY_PROFILE:-}" ]; then
   if [ "$SIGN_IDENTITY" = "-" ]; then
-    echo "NOTARY_PROFILE werkt alleen samen met SIGN_IDENTITY (een Developer ID)."
+    echo "NOTARY_PROFILE only works together with SIGN_IDENTITY (a Developer ID)."
     exit 1
   fi
-  echo "Notariseren..."
+  echo "Notarizing..."
   rm -f .build/ScreenshotHub.zip
   mkdir -p .build
   ditto -c -k --keepParent "$APP" .build/ScreenshotHub.zip
@@ -147,35 +147,35 @@ if [ -n "${NOTARY_PROFILE:-}" ]; then
   xcrun stapler staple "$APP"
 fi
 
-# DMG om de app te delen: de app plus een snelkoppeling naar Programma's, zodat je hem
-# er met slepen in zet. Bij --release wordt ook de DMG ondertekend, genotariseerd en gestapled.
+# DMG for sharing the app: the app plus a shortcut to Applications, so you install it by
+# dragging. With --release the DMG is also signed, notarized and stapled.
 if [ "$MAKE_DMG" = 1 ]; then
-  # Geen spaties: GitHub maakt daar punten van in de bijlagen van een release.
+  # No spaces: GitHub turns them into dots in release assets.
   DMG="dist/ScreenshotHub-$VERSION.dmg"
   STAGING=".build/dmg"
-  echo "DMG maken..."
+  echo "Creating DMG..."
   rm -rf "$STAGING" "$DMG"
   mkdir -p "$STAGING" dist
   ditto "$APP" "$STAGING/$APP"
-  ln -s /Applications "$STAGING/Programma's"
-  # hdiutil faalt soms tijdelijk met "Resource busy" (bekend op build-servers): tot drie pogingen.
+  ln -s /Applications "$STAGING/Applications"
+  # hdiutil sometimes fails temporarily with "Resource busy" (known on build servers): up to three attempts.
   for attempt in 1 2 3; do
     if hdiutil create -quiet -volname "Screenshot Hub $VERSION" -srcfolder "$STAGING" \
         -format UDZO -fs HFS+ "$DMG"; then
       break
     fi
     if [ "$attempt" = 3 ]; then
-      echo "DMG maken is drie keer mislukt."
+      echo "Creating the DMG failed three times."
       exit 1
     fi
-    echo "DMG maken mislukte, opnieuw over 5 seconden..."
+    echo "Creating the DMG failed, retrying in 5 seconds..."
     rm -f "$DMG"
     sleep 5
   done
   rm -rf "$STAGING"
   if [ "$RELEASE" = 1 ]; then
     codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
-    echo "DMG notariseren..."
+    echo "Notarizing DMG..."
     xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$DMG"
   fi
@@ -183,16 +183,16 @@ if [ "$MAKE_DMG" = 1 ]; then
   echo "DMG: $(pwd)/$DMG"
 fi
 
-# Finder en het Dock laten weten dat de app (en zijn icoon) is veranderd.
+# Tell Finder and the Dock that the app (and its icon) has changed.
 touch "$APP"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
 
-echo "Klaar: $(pwd)/$APP"
-echo "Sleep hem naar Programma's of start hem met: open \"$APP\""
+echo "Done: $(pwd)/$APP"
+echo "Drag it to Applications or start it with: open \"$APP\""
 if [ "$RELEASE" = 0 ]; then
-  echo "Let op: dit is een lokale build, alleen voor deze Mac. Om te delen: bash build.sh --release"
+  echo "Note: this is a local build, for this Mac only. To share: bash build.sh --release"
   if [ "$MAKE_DMG" = 1 ]; then
-    echo "Deze DMG is niet genotariseerd: op een andere Mac moet de gebruiker de app eerst toestaan"
-    echo "via Systeeminstellingen › Privacy en beveiliging › Open toch. Zie README."
+    echo "This DMG is not notarized: on another Mac the user first has to allow the app"
+    echo "via System Settings › Privacy & Security › Open Anyway. See README."
   fi
 fi

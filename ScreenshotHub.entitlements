@@ -2,13 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- App Sandbox: geen toegang tot bestanden, netwerk of hardware tenzij hieronder toegestaan. -->
+  <!-- App Sandbox: no access to files, network or hardware unless allowed below. -->
   <key>com.apple.security.app-sandbox</key><true/>
-  <!-- Lezen en schrijven in mappen die de gebruiker zelf kiest of naar de app sleept. -->
+  <!-- Read and write in folders the user chooses or drags onto the app. -->
   <key>com.apple.security.files.user-selected.read-write</key><true/>
-  <!-- Die keuze onthouden na een herstart (security-scoped bookmarks). -->
+  <!-- Remember that choice across restarts (security-scoped bookmarks). -->
   <key>com.apple.security.files.bookmarks.app-scope</key><true/>
-  <!-- Uitgaand netwerk, alleen voor de dagelijkse updatecheck bij api.github.com. Geen server. -->
+  <!-- Outgoing network, only for the daily update check at api.github.com. No server. -->
   <key>com.apple.security.network.client</key><true/>
 </dict>
 </plist>
