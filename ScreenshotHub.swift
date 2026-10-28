@@ -68,8 +68,10 @@ struct UndoAction {
     var moved = true
     var stored: [(shot: MemoryShot, file: URL)] = []
     var discarded: [MemoryShot] = []
+    /// Marked-up screenshots: the version from before the markup and the id of the new one.
+    var replaced: [(old: MemoryShot, new: UUID)] = []
     var targetName = ""
-    var isEmpty: Bool { files.isEmpty && stored.isEmpty && discarded.isEmpty }
+    var isEmpty: Bool { files.isEmpty && stored.isEmpty && discarded.isEmpty && replaced.isEmpty }
 }
 
 extension UTType {
@@ -90,6 +92,9 @@ final class Store: ObservableObject {
     @Published var memorySelection: Set<UUID> = []
     @Published var isCapturing = false
     @Published var toast: Toast?
+    /// The screenshot being marked up; the markup screen then fills the window.
+    @Published var markup: MarkupSession?
+    var isMarkingUp: Bool { markup != nil }
 
     enum Tab: Hashable { case memory, stored, space(UUID) }
     /// Always starts on memory. Switching clears the selection, so ⌘1–⌘9 never
@@ -188,7 +193,7 @@ final class Store: ObservableObject {
         // Escape clears the selection, unless you are typing in a text field or a dialog is open.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.keyCode == 53, self.hasSelection,
-                  NSApp.modalWindow == nil,
+                  NSApp.modalWindow == nil, !self.isMarkingUp,
                   !(NSApp.keyWindow?.firstResponder is NSText) else { return event }
             self.selection = []
             self.memorySelection = []
@@ -501,6 +506,69 @@ final class Store: ObservableObject {
         showToast("Image copied")
     }
 
+    // MARK: Markup
+
+    /// Opens a screenshot from memory in the markup screen.
+    func markUp(memory id: UUID) {
+        guard let shot = memoryShots.first(where: { $0.id == id }),
+              let source = CGImageSourceCreateWithData(shot.png as CFData, nil),
+              let session = MarkupSession(source: .memory(id), image: source) else {
+            showToast("Couldn’t mark up: the image is not readable")
+            return
+        }
+        markup = session
+    }
+
+    /// Opens a saved screenshot. The result goes into memory as a copy; the file stays as it is.
+    func markUp(file url: URL) {
+        guard Store.isImageFile(url),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let session = MarkupSession(source: .file(url), image: source) else {
+            showToast("Couldn’t mark up: the file is not a readable image")
+            return
+        }
+        markup = session
+    }
+
+    var canMarkUpSelection: Bool { !isMarkingUp && memorySelection.count + selection.count == 1 }
+
+    func markUpSelection() {
+        guard canMarkUpSelection else { return }
+        if let id = memorySelection.first {
+            markUp(memory: id)
+        } else if let url = selection.first {
+            markUp(file: url)
+        }
+    }
+
+    /// Draws the marks into the image. A screenshot from memory is replaced (with Undo),
+    /// a saved file gets a copy in memory.
+    func finishMarkup(_ session: MarkupSession, marks: [Mark]) {
+        guard let png = renderMarkup(session, marks: marks) else {
+            showToast("Couldn’t mark up: the image could not be created")
+            return
+        }
+        if case .memory(let id) = session.source,
+           let index = memoryShots.firstIndex(where: { $0.id == id }) {
+            let old = memoryShots[index]
+            guard let new = MemoryShot(png: png, date: old.date) else { return }
+            memoryShots[index] = new
+            if memorySelection.remove(id) != nil { memorySelection.insert(new.id) }
+            lastUndo = UndoAction(replaced: [(old: old, new: new.id)])
+            showToast("Markup added", canUndo: true)
+        } else {
+            // A saved file, or a screenshot that has left memory in the meantime.
+            guard let new = MemoryShot(png: png) else { return }
+            addToMemory(new)
+            showToast("Marked-up copy is in memory")
+        }
+        markup = nil
+    }
+
+    func cancelMarkup() {
+        markup = nil
+    }
+
     // MARK: Delivering to Hot Spaces
 
     func dropped(_ urls: [URL], memory ids: [UUID], on space: HotSpace) {
@@ -647,12 +715,19 @@ final class Store: ObservableObject {
         if !restored.isEmpty {
             memoryShots = (memoryShots + restored).sorted { $0.date > $1.date }
         }
+        for item in last.replaced {
+            guard let index = memoryShots.firstIndex(where: { $0.id == item.new }) else { continue }
+            memoryShots[index] = item.old
+            if memorySelection.remove(item.new) != nil { memorySelection.insert(item.old.id) }
+        }
 
         let total = last.files.count + last.stored.count + last.discarded.count
         if failed > 0, let failure {
             showToast("Couldn’t undo \(failed) of \(total) screenshots: \(failure)")
         } else if !last.discarded.isEmpty || !last.stored.isEmpty {
             showToast("Back in memory")
+        } else if !last.replaced.isEmpty {
+            showToast("Markup removed")
         } else {
             showToast(last.moved ? "Moved back from \(last.targetName)" : "Copy removed from \(last.targetName)")
         }
@@ -1028,6 +1103,174 @@ struct LocalState<Value>: DynamicProperty {
     var projectedValue: Binding<Value> { $box.value }
 }
 
+// MARK: - Marks
+
+/// A mark on a screenshot. Points are in image pixels, from the top left.
+struct Mark {
+    enum Tool: CaseIterable {
+        case pen, highlighter, arrow, rectangle, ellipse
+
+        var name: String {
+            switch self {
+            case .pen: return "Pen"
+            case .highlighter: return "Highlighter"
+            case .arrow: return "Arrow"
+            case .rectangle: return "Rectangle"
+            case .ellipse: return "Oval"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .pen: return "pencil.tip"
+            case .highlighter: return "highlighter"
+            case .arrow: return "arrow.up.right"
+            case .rectangle: return "rectangle"
+            case .ellipse: return "circle"
+            }
+        }
+
+        /// Shortcut without ⌘ in the markup screen.
+        var key: Character {
+            switch self {
+            case .pen: return "p"
+            case .highlighter: return "h"
+            case .arrow: return "a"
+            case .rectangle: return "r"
+            case .ellipse: return "o"
+            }
+        }
+    }
+
+    var tool: Tool
+    /// Pen and highlighter: every point. The shapes only use the first and the last.
+    var points: [CGPoint]
+    var color: NSColor
+    var width: CGFloat
+
+    /// The highlighter is wider and translucent, so what is underneath stays readable.
+    var lineWidth: CGFloat { tool == .highlighter ? width * 3 : width }
+    var strokeColor: NSColor { tool == .highlighter ? color.withAlphaComponent(0.4) : color }
+
+    var path: Path {
+        var path = Path()
+        guard let start = points.first, let end = points.last else { return path }
+        let rect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
+                          width: abs(end.x - start.x), height: abs(end.y - start.y))
+        switch tool {
+        case .pen, .highlighter:
+            // Smooth: through the midpoints between points, with the points themselves as control points.
+            path.move(to: start)
+            for (a, b) in zip(points, points.dropFirst()) {
+                path.addQuadCurve(to: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2), control: a)
+            }
+            path.addLine(to: end)
+        case .arrow:
+            path.move(to: start)
+            path.addLine(to: end)
+            guard start != end else { break }
+            let angle = atan2(end.y - start.y, end.x - start.x)
+            let head = lineWidth * 4
+            for side in [-1.0, 1.0] {
+                let wing = angle + .pi + side * .pi / 6
+                path.move(to: end)
+                path.addLine(to: CGPoint(x: end.x + head * cos(wing), y: end.y + head * sin(wing)))
+            }
+        case .rectangle:
+            path.addRect(rect)
+        case .ellipse:
+            path.addEllipse(in: rect)
+        }
+        return path
+    }
+}
+
+/// Fixed sRGB colors: system colors differ between light and dark mode, an image does not.
+let markColors: [(name: String, color: NSColor)] = [
+    ("Red", NSColor(srgbRed: 1, green: 0.23, blue: 0.19, alpha: 1)),
+    ("Orange", NSColor(srgbRed: 1, green: 0.58, blue: 0, alpha: 1)),
+    ("Yellow", NSColor(srgbRed: 1, green: 0.84, blue: 0, alpha: 1)),
+    ("Green", NSColor(srgbRed: 0.2, green: 0.78, blue: 0.35, alpha: 1)),
+    ("Blue", NSColor(srgbRed: 0, green: 0.48, blue: 1, alpha: 1)),
+    ("Black", NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)),
+    ("White", NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)),
+]
+
+/// A screenshot in the markup screen: from memory, or a saved file.
+struct MarkupSession {
+    enum Source { case memory(UUID), file(URL) }
+
+    let source: Source
+    let image: CGImage
+    /// Resolution of the original (144 on Retina), so the result opens at the same size.
+    let dpi: (width: Double, height: Double)?
+
+    init?(source: Source, image imageSource: CGImageSource) {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int,
+              // Full size, rotated upright according to the metadata.
+              let image = makeThumbnail(imageSource, maxPixel: max(width, height)) else { return nil }
+        self.source = source
+        self.image = image
+        if let x = props[kCGImagePropertyDPIWidth] as? Double, let y = props[kCGImagePropertyDPIHeight] as? Double {
+            dpi = (x, y)
+        } else {
+            dpi = nil
+        }
+    }
+}
+
+/// Draws the marks into the image and returns the result as PNG. Everything happens in memory.
+func renderMarkup(_ session: MarkupSession, marks: [Mark]) -> Data? {
+    let image = session.image
+    let space = image.colorSpace.flatMap { $0.model == .rgb ? $0 : nil }
+        ?? CGColorSpace(name: CGColorSpace.sRGB)!
+    guard let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+    context.draw(image, in: bounds)
+    // Marks count from the top left, Core Graphics from the bottom left.
+    context.translateBy(x: 0, y: bounds.height)
+    context.scaleBy(x: 1, y: -1)
+    context.setLineCap(.round)
+    context.setLineJoin(.round)
+    for mark in marks {
+        context.addPath(mark.path.cgPath)
+        context.setStrokeColor(mark.strokeColor.cgColor)
+        context.setLineWidth(mark.lineWidth)
+        context.strokePath()
+    }
+    guard let result = context.makeImage() else { return nil }
+    let data = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
+    else { return nil }
+    var props: [CFString: Any] = [:]
+    if let dpi = session.dpi {
+        props[kCGImagePropertyDPIWidth] = dpi.width
+        props[kCGImagePropertyDPIHeight] = dpi.height
+    }
+    CGImageDestinationAddImage(destination, result, props as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else { return nil }
+    return data as Data
+}
+
+/// The marks in the markup screen. Changes go through the window's UndoManager,
+/// so ⌘Z and ⌘⇧Z from the Edit menu work.
+final class MarkupModel: ObservableObject {
+    @Published private(set) var marks: [Mark] = []
+    /// The mark being drawn right now.
+    @Published var current: Mark?
+    weak var undoManager: UndoManager?
+
+    func set(_ new: [Mark]) {
+        let old = marks
+        marks = new
+        undoManager?.registerUndo(withTarget: self) { $0.set(old) }
+    }
+}
+
 // MARK: - App
 
 /// Warns on quit, because screenshots in memory are lost then.
@@ -1338,21 +1581,26 @@ struct ScreenshotHubApp: App {
                 Toggle("Check for Updates Daily", isOn: $updates.enabled)
             }
             CommandGroup(replacing: .newItem) {
+                // While marking up, actions that put the screenshot away are off.
                 Button("New Screenshot") { store.captureToMemory() }
                     .keyboardShortcut("n")
-                    .disabled(store.isCapturing)
+                    .disabled(store.isCapturing || store.isMarkingUp)
                 Button("Save Selection") { store.saveMemory(Array(store.memorySelection)) }
                     .keyboardShortcut("s")
-                    .disabled(store.memorySelection.isEmpty)
+                    .disabled(store.memorySelection.isEmpty || store.isMarkingUp)
                 Button("Save All from Memory") { store.saveMemory(store.memoryShots.map(\.id)) }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
-                    .disabled(store.memoryShots.isEmpty)
+                    .disabled(store.memoryShots.isEmpty || store.isMarkingUp)
+                Divider()
+                Button("Mark Up…") { store.markUpSelection() }
+                    .keyboardShortcut("e")
+                    .disabled(!store.canMarkUpSelection)
             }
             CommandMenu("Hot Spaces") {
                 ForEach(Array(store.hotSpaces.prefix(9).enumerated()), id: \.element.id) { index, space in
                     Button("Send to \(space.name)") { store.deliverSelection(to: space) }
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
-                        .disabled(!store.hasSelection)
+                        .disabled(!store.hasSelection || store.isMarkingUp)
                 }
                 Divider()
                 Button("Add Hot Space…") { store.addHotSpace() }
@@ -1387,28 +1635,34 @@ struct ContentView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            HotSpacesPanel()
-                .frame(width: 270)
-            Divider()
-            VStack(spacing: 0) {
-                updateBanner
-                tabBar
-                Divider()
-                switch store.tab {
-                case .memory:
-                    memoryHeader
+        Group {
+            if let session = store.markup {
+                MarkupView(session: session)
+            } else {
+                HStack(spacing: 0) {
+                    HotSpacesPanel()
+                        .frame(width: 270)
                     Divider()
-                    memoryGallery
-                case .stored:
-                    storedHeader
-                    Divider()
-                    fileGallery
-                case .space:
-                    if let space = store.viewedSpace {
-                        spaceHeader(space)
+                    VStack(spacing: 0) {
+                        updateBanner
+                        tabBar
                         Divider()
-                        fileGallery
+                        switch store.tab {
+                        case .memory:
+                            memoryHeader
+                            Divider()
+                            memoryGallery
+                        case .stored:
+                            storedHeader
+                            Divider()
+                            fileGallery
+                        case .space:
+                            if let space = store.viewedSpace {
+                                spaceHeader(space)
+                                Divider()
+                                fileGallery
+                            }
+                        }
                     }
                 }
             }
@@ -1519,7 +1773,13 @@ struct ContentView: View {
                 ForEach(store.memoryShots) { shot in
                     MemoryCard(shot: shot, selected: store.memorySelection.contains(shot.id))
                         .onDrag { memoryItemProvider(for: shot) }
-                        .onTapGesture { handleMemoryTap(shot) }
+                        .onTapGesture {
+                            if NSApp.currentEvent?.clickCount == 2 {
+                                store.markUp(memory: shot.id)
+                            } else {
+                                handleMemoryTap(shot)
+                            }
+                        }
                         .contextMenu { memoryMenu(shot) }
                 }
             }
@@ -1548,6 +1808,8 @@ struct ContentView: View {
     @ViewBuilder
     private func memoryMenu(_ shot: MemoryShot) -> some View {
         let targets = store.memorySelection.contains(shot.id) ? Array(store.memorySelection) : [shot.id]
+        Button("Mark Up…") { store.markUp(memory: shot.id) }
+        Divider()
         Button("Save to \(store.sourceFolder.lastPathComponent)") { store.saveMemory(targets) }
         if !store.hotSpaces.isEmpty {
             Menu("Save to Hot Space") {
@@ -1678,6 +1940,7 @@ struct ContentView: View {
     private func shotMenu(_ shot: Shot) -> some View {
         let targets = store.selection.contains(shot.url) ? Array(store.selection) : [shot.url]
         Button("Open") { NSWorkspace.shared.open(shot.url) }
+        Button("Mark Up…") { store.markUp(file: shot.url) }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(targets) }
         Button("Copy Image") { store.copyToClipboard(shot.url) }
         if !store.hotSpaces.isEmpty {
@@ -1758,6 +2021,7 @@ struct MemoryCard: View {
             .strokeBorder(selected ? Color.accentColor : Color.orange.opacity(0.5),
                           style: StrokeStyle(lineWidth: selected ? 2 : 1, dash: selected ? [] : [5, 3])))
         .contentShape(Rectangle())
+        .help("Double-click to mark up")
     }
 }
 
@@ -1821,6 +2085,169 @@ struct ThumbnailView: View {
                 image = ns
             }
         }
+    }
+}
+
+// MARK: - Markup screen
+
+struct MarkupView: View {
+    @EnvironmentObject var store: Store
+    @Environment(\.undoManager) private var undoManager
+    let session: MarkupSession
+    @StateObject private var model = MarkupModel()
+    @LocalState private var tool = Mark.Tool.pen
+    @LocalState private var colorIndex = 0
+    /// Multiple of the base width: thin, medium or thick.
+    @LocalState private var thickness: CGFloat = 2
+    @LocalState private var crosshair = false
+
+    /// Base width in pixels, in proportion to the image: thicker on a large screenshot.
+    private var unit: CGFloat {
+        max(2, CGFloat(max(session.image.width, session.image.height)) / 500)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            toolbar
+            Divider()
+            canvas
+        }
+        .onAppear {
+            // Undo only the marks, not what happened earlier in the window.
+            undoManager?.removeAllActions()
+            model.undoManager = undoManager
+        }
+        .onDisappear {
+            undoManager?.removeAllActions(withTarget: model)
+            if crosshair { NSCursor.pop() }
+        }
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 14) {
+            HStack(spacing: 2) {
+                ForEach(Mark.Tool.allCases, id: \.self) { item in
+                    Button { tool = item } label: {
+                        Image(systemName: item.symbol)
+                            .frame(width: 30, height: 24)
+                            .background(RoundedRectangle(cornerRadius: 5)
+                                .fill(tool == item ? Color.accentColor.opacity(0.25) : Color.clear))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(KeyEquivalent(item.key), modifiers: [])
+                    .help("\(item.name) (\(item.key.uppercased()))")
+                }
+            }
+            Divider().frame(height: 20)
+            HStack(spacing: 4) {
+                ForEach(markColors.indices, id: \.self) { index in
+                    Button { colorIndex = index } label: {
+                        Circle()
+                            .fill(Color(nsColor: markColors[index].color))
+                            .overlay(Circle().strokeBorder(Color.secondary.opacity(0.5), lineWidth: 1))
+                            .frame(width: 16, height: 16)
+                            .padding(3)
+                            .overlay(Circle().strokeBorder(colorIndex == index ? Color.accentColor : Color.clear,
+                                                           lineWidth: 2))
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(markColors[index].name)
+                }
+            }
+            Picker("Thickness", selection: $thickness) {
+                Text("Thin").tag(CGFloat(1))
+                Text("Medium").tag(CGFloat(2))
+                Text("Thick").tag(CGFloat(4))
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            Spacer()
+            Button { undoManager?.undo() } label: { Image(systemName: "arrow.uturn.backward") }
+                .disabled(!(undoManager?.canUndo ?? false))
+                .help("Undo (⌘Z)")
+            Button("Clear All") { model.set([]) }
+                .disabled(model.marks.isEmpty)
+            Button("Cancel", action: cancel)
+                .keyboardShortcut(.cancelAction)
+            Button("Done") { store.finishMarkup(session, marks: model.marks) }
+                .keyboardShortcut(.defaultAction)
+                .disabled(model.marks.isEmpty)
+                .help(doneHelp)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var doneHelp: String {
+        if case .file = session.source {
+            return "A marked-up copy goes into memory; the file stays as it is (↩)"
+        }
+        return "Put the marks into the screenshot (↩)"
+    }
+
+    private var canvas: some View {
+        GeometryReader { geo in
+            let image = session.image
+            let size = CGSize(width: image.width, height: image.height)
+            // Fits the window, but never larger than one point per pixel.
+            let scale = min(geo.size.width / size.width, geo.size.height / size.height, 1)
+            Canvas { context, _ in
+                context.draw(Image(decorative: image, scale: 1),
+                             in: CGRect(x: 0, y: 0, width: size.width * scale, height: size.height * scale))
+                context.scaleBy(x: scale, y: scale)
+                for mark in model.marks + [model.current].compactMap({ $0 }) {
+                    context.stroke(mark.path, with: .color(Color(nsColor: mark.strokeColor)),
+                                   style: StrokeStyle(lineWidth: mark.lineWidth, lineCap: .round, lineJoin: .round))
+                }
+            }
+            .frame(width: size.width * scale, height: size.height * scale)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    drag(to: CGPoint(x: value.location.x / scale, y: value.location.y / scale))
+                }
+                .onEnded { _ in
+                    guard let mark = model.current else { return }
+                    model.current = nil
+                    model.set(model.marks + [mark])
+                })
+            .onHover { inside in
+                guard inside != crosshair else { return }
+                crosshair = inside
+                if inside { NSCursor.crosshair.push() } else { NSCursor.pop() }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(16)
+        .background(Color.secondary.opacity(0.08))
+    }
+
+    private func drag(to point: CGPoint) {
+        guard var mark = model.current else {
+            model.current = Mark(tool: tool, points: [point], color: markColors[colorIndex].color,
+                                 width: unit * thickness)
+            return
+        }
+        switch mark.tool {
+        case .pen, .highlighter: mark.points.append(point)
+        case .arrow, .rectangle, .ellipse: mark.points = [mark.points[0], point]
+        }
+        model.current = mark
+    }
+
+    private func cancel() {
+        if !model.marks.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "Discard your marks?"
+            alert.informativeText = "The screenshot stays as it was."
+            alert.addButton(withTitle: "Discard").hasDestructiveAction = true
+            alert.addButton(withTitle: "Keep Marking Up").keyEquivalent = "\u{1b}"
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        store.cancelMarkup()
     }
 }
 
