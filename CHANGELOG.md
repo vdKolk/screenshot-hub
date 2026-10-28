@@ -2,6 +2,12 @@
 
 The version number is in `VERSION`. The build number is the number of commits; together with the commit and the build date you can see it in **Screenshot Hub › About Screenshot Hub**.
 
+## 1.5.0
+
+- **Mark Up**: draw on a screenshot with a pen, highlighter, arrow, rectangle or oval, in seven colors and three thicknesses. Open it by double-clicking a screenshot in memory, with **Mark Up…** in the context menu, or with ⌘E.
+- Marks on a screenshot in memory can be taken back with **Undo** in the notice. A saved screenshot is never changed; the marked-up version goes into memory as a copy.
+- Marking up happens entirely in memory, without temporary files. The resolution of the original (for example 144 dpi on Retina) is kept.
+
 ## 1.4.0
 
 - **English**: the app, the code, the documentation and the release notes are now in English. Saved screenshots are named the way English macOS names them: `Screenshot 2026-10-21 at 09.41.22.png`.

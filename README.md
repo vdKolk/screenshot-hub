@@ -16,6 +16,10 @@
   - Screenshots from memory are saved there. Saved screenshots are moved or copied, your choice.
   - Click a Hot Space without a selection, or click its eye, to see what is in it.
   - If you rename or move the folder in Finder, the Hot Space keeps working.
+- **Mark Up**: double-click a screenshot in memory, or choose **Mark Up…** (⌘E), and draw on it with a pen, highlighter, arrow, rectangle or oval, in seven colors and three thicknesses.
+  - **Done** (↩) puts the marks into the screenshot; Undo in the notice brings back the original. **Cancel** (Esc) leaves it as it was.
+  - A saved screenshot is never changed: the marked-up version goes into memory as a copy.
+  - Shortcuts in the markup screen: P, H, A, R and O pick the tool; ⌘Z and ⌘⇧Z undo and redo.
 - **Undo**: after saving, moving, copying or discarding, the notice at the bottom has an Undo button.
 - **Update notice**: once a day the app checks GitHub for a newer version and shows a notice at the top of the window with a button to the release. Check manually via **Screenshot Hub › Check for Updates…**.
 - **Safe quit**: if screenshots are still in memory, the app asks whether to save them when you quit.
@@ -27,10 +31,11 @@
 | ⌘N | New screenshot in memory |
 | ⌘S | Save selected screenshots to the screenshot folder |
 | ⌘⇧S | Save everything in memory |
+| ⌘E | Mark up the selected screenshot |
 | ⌘1 to ⌘9 | Send selection to Hot Space 1 to 9 |
 | Esc | Clear selection |
 | Click, ⌘-click, ⇧-click | Select, add or remove, select a range |
-| Double-click | Open a saved screenshot |
+| Double-click | Mark up a screenshot in memory, open a saved screenshot |
 
 ## Building
 
