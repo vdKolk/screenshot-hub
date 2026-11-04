@@ -6,20 +6,25 @@
 
 ## What it does
 
-- **In Memory**: screenshots that have not been saved yet.
+- **In Memory**: screenshots and screen recordings that have not been saved yet.
   - Take one with the **Take Screenshot** button (⌘N): select an area, or press Space for a window.
-  - Or turn on **Clipboard Capture** (off by default) and take one to the clipboard with ⌃⌘⇧4. Images an app marks as confidential or transient, such as from a password manager, are skipped.
-  - Save per card, with ⌘S for the selection, or with **Save All** (⌘⇧S).
+  - Or make a short screen recording with **Record** (⌘⇧N): drag an area, or click to record the whole screen, and click **Stop** in the small bar next to it (or ⌘⇧N again). Recordings have no sound and are saved as .mov. The first time, macOS asks for the Screen Recording permission; screenshots don't need it.
+  - With a folder open (**Saved**, a Hot Space or a subfolder), new screenshots and recordings go straight into that folder instead, with Undo in the notice.
+  - Or turn on **Clipboard Capture** (the clipboard button in the top bar, off by default) and take one to the clipboard with ⌃⌘⇧4. Images an app marks as confidential or transient, such as from a password manager, are skipped.
+  - Save with the quick actions that appear when you hover over a card, with ⌘S for the selection, or with **Save All** (⌘⇧S).
 - **Saved**: what is in your screenshot folder. You choose that folder yourself, for example the one macOS uses (see ⌘⇧5 › Options).
 - **Hot Spaces**: folders in the sidebar you send screenshots to.
   - Drag a screenshot onto a Hot Space, click it with a selection, or press ⌘1 to ⌘9.
   - Screenshots from memory are saved there. Saved screenshots are moved or copied, your choice.
   - Click a Hot Space without a selection, or click its eye, to see what is in it.
+  - Folders inside a Hot Space are targets too: click the arrow next to it to show them, and drop or send screenshots on any of them. Right-click a subfolder to add it as a Hot Space of its own.
   - If you rename or move the folder in Finder, the Hot Space keeps working.
-- **Mark Up**: double-click a screenshot in memory, or choose **Mark Up…** (⌘E), and draw on it with a pen, highlighter, arrow, rectangle or oval, in seven colors and three thicknesses.
+- **Mark Up**: select a screenshot and click **Mark Up** in the top bar (⌘E), or double-click a screenshot in memory, and draw on it with a pen, highlighter, arrow, rectangle or oval, in seven colors and three thicknesses.
+  - **Blur** makes an area unreadable: drag a rectangle over it. The area is pixelated and then blurred, so text underneath cannot be read back.
+  - Zoom with the controls at the bottom, ⌘+, ⌘− and ⌘0 (fit), or pinch on the trackpad. 100% is the size the screenshot had on screen.
   - **Done** (↩) puts the marks into the screenshot; Undo in the notice brings back the original. **Cancel** (Esc) leaves it as it was.
-  - A saved screenshot is never changed: the marked-up version goes into memory as a copy.
-  - Shortcuts in the markup screen: P, H, A, R and O pick the tool; ⌘Z and ⌘⇧Z undo and redo.
+  - For a saved screenshot, **Done** overwrites the file in its own format (a JPEG stays a JPEG). **Undo** in the notice brings back the original.
+  - Shortcuts in the markup screen: P, H, A, R, O and B pick the tool; ⌘Z and ⌘⇧Z undo and redo.
 - **Undo**: after saving, moving, copying or discarding, the notice at the bottom has an Undo button.
 - **Update notice**: once a day the app checks GitHub for a newer version and shows a notice at the top of the window with a button to the release. Check manually via **Screenshot Hub › Check for Updates…**.
 - **Safe quit**: if screenshots are still in memory, the app asks whether to save them when you quit.
@@ -28,7 +33,8 @@
 
 | Key | Action |
 | --- | --- |
-| ⌘N | New screenshot in memory |
+| ⌘N | New screenshot (in memory, or in the folder that is open) |
+| ⌘⇧N | New screen recording (in memory, or in the folder that is open) |
 | ⌘S | Save selected screenshots to the screenshot folder |
 | ⌘⇧S | Save everything in memory |
 | ⌘E | Mark up the selected screenshot |

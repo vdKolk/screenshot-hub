@@ -2,6 +2,18 @@
 
 The version number is in `VERSION`. The build number is the number of commits; together with the commit and the build date you can see it in **Screenshot Hub › About Screenshot Hub**.
 
+## 1.6.0
+
+- **Screen recordings**: **Record** (⌘⇧N) dims the screen: drag an area, or click to record the whole screen. A small bar next to the area shows the time and **Stop** (also ⌘⇧N); it stays visible when you click other apps and is kept out of the recording. While recording, the app steps aside like during a screenshot; click it in the Dock to get the window back, where **Record** has become a red **Stop** with the time. Screenshots can still be taken during a recording. Recording happens in the app with ScreenCaptureKit and AVFoundation (H.264 `.mov`), because `screencapture -v` doesn't work from a sandboxed app; it needs the Screen Recording permission (screenshots don't): the first time macOS asks, after that the app explains where to turn it on. Recordings have no sound and land in memory as a card with a play symbol and their length; they are saved as `Screen Recording … .mov`. Saved recordings show up in the folders too, and can be moved and copied to Hot Spaces. They cannot be marked up.
+- **Straight into the open folder**: with **Saved**, a Hot Space or a subfolder open, a new screenshot or recording is saved there right away, with Undo (which puts it back in memory). On **In Memory** nothing changes. The status bar says "New screenshots go here".
+- **Marking up a saved screenshot overwrites it**, in its own format (a JPEG stays a JPEG), keeping its permissions, creation date and screenshot marker. The file is replaced in one step (`renamex_np` with `RENAME_SWAP`). **Undo** in the notice brings back the original, which is kept in memory until the notice expires.
+- Take Screenshot and Record are in the top bar on every tab. In a narrow window the buttons show only their symbol, and then the In Memory and Saved tabs too.
+- **Blur**: a new markup tool that makes an area unreadable. Drag a rectangle over it; the area is pixelated in blocks about the height of a line of text and then blurred, so text underneath cannot be read back. Shortcut B.
+- **Zoom** in the markup screen: zoom controls at the bottom, ⌘+, ⌘− and ⌘0 (fit), and pinch on the trackpad. 100% is the size the screenshot had on screen.
+- **Subfolders in Hot Spaces**: a Hot Space with folders inside shows an arrow to expand them. Every subfolder is a target for dropping, clicking and the context menus, and can be opened as a tab. Right-click a subfolder to add it as a Hot Space of its own.
+- **Mark Up button** in the top bar for the selected screenshot, next to double-click, the context menu and ⌘E.
+- **New look**: one bar at the top with the tabs and actions, a translucent sidebar, a status bar at the bottom, and quieter cards with an **Unsaved** label and quick actions (mark up, save, discard, show in Finder) when you hover. The markup screen uses the same bars and button groups, with the colors and line thicknesses right in the bar. Clipboard Capture and the screenshot filter are buttons in the top bar.
+
 ## 1.5.0
 
 - **Mark Up**: draw on a screenshot with a pen, highlighter, arrow, rectangle or oval, in seven colors and three thicknesses. Open it by double-clicking a screenshot in memory, with **Mark Up…** in the context menu, or with ⌘E.
